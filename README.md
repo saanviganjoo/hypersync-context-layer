@@ -42,6 +42,10 @@ Switch identity with the **Asking as** selector on the Context Layer:
 
 Then turn the permissions layer **off** on the Dashboard and re-ask anything — the Context Layer, the Access Simulator and the agent gateway all go default-deny together, because they share one engine.
 
+## Design notes
+
+- [Access Ingestion & the Permission Store](docs/access-ingestion-design.md) — where access facts come from (tool sync, IAM, CSV), how they are stored, and which source wins on conflict. Draft for engineering review.
+
 ## Running locally
 
 No build step and no dependencies. Serve the folder over HTTP (ES modules will not load from `file://`):
