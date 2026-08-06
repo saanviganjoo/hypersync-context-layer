@@ -123,8 +123,10 @@ function resources() {
     ],
     conn_zoho: [
       { id: "entity_india", type: "Accounts", name: "India Entity", parentId: null },
+      { id: "entity_us", type: "Accounts", name: "US Entity", parentId: null },
       { id: "accounts_master", type: "Accounts", name: "Accounts", parentId: "entity_india" },
-      { id: "invoices_india", type: "Invoices", name: "Invoices", parentId: "entity_india" },
+      { id: "invoices_india", type: "Invoices", name: "India invoices", parentId: "entity_india" },
+      { id: "invoices_us", type: "Invoices", name: "US invoices", parentId: "entity_us" },
       { id: "payments_india", type: "Payments", name: "Payments", parentId: "entity_india" }
     ],
     conn_confluence: [
@@ -143,9 +145,9 @@ function resources() {
 function employees() {
   return [
     ["emp_rahul", "EMP-1001", "Rahul Menon", "rahul.menon@tartanhq.com", "Finance", "Finance Manager", "M3", "Bengaluru", "Full-time", "Active", "Aditi Rao", "okta_rahul", "rahul.menon", ["role_finance_manager"]],
-    ["emp_aditi", "EMP-1002", "Aditi Rao", "aditi.rao@tartanhq.com", "Finance", "Director Finance", "M5", "Mumbai", "Full-time", "Active", "Meera Iyer", "okta_aditi", "aditi-rao", ["role_finance_manager"]],
+    ["emp_aditi", "EMP-1002", "Aditi Rao", "aditi.rao@tartanhq.com", "Finance", "Director Finance", "M5", "Mumbai", "Full-time", "Active", "Meera Iyer", "okta_aditi", "aditi-rao", ["role_finance_director"]],
     ["emp_sana", "EMP-1003", "Sana Khan", "sana.khan@tartanhq.com", "Support", "Support Agent", "L2", "Pune", "Full-time", "Active", "Vikram Sethi", "okta_sana", "sana-khan", ["role_support_agent"]],
-    ["emp_vikram", "EMP-1004", "Vikram Sethi", "vikram.sethi@tartanhq.com", "Support", "Support Lead", "M2", "Pune", "Full-time", "Active", "Meera Iyer", "okta_vikram", "vikram-sethi", ["role_support_agent"]],
+    ["emp_vikram", "EMP-1004", "Vikram Sethi", "vikram.sethi@tartanhq.com", "Support", "Support Lead", "M2", "Pune", "Full-time", "Active", "Meera Iyer", "okta_vikram", "vikram-sethi", ["role_support_lead"]],
     ["emp_ishaan", "EMP-1005", "Ishaan Mehta", "ishaan.mehta@tartanhq.com", "Engineering", "Engineering Lead", "M3", "Bengaluru", "Full-time", "Active", "Neha Kapoor", "okta_ishaan", "ishaan-mehta", ["role_engineering_lead"]],
     ["emp_neha", "EMP-1006", "Neha Kapoor", "neha.kapoor@tartanhq.com", "Engineering", "VP Engineering", "M5", "Bengaluru", "Full-time", "Active", "Meera Iyer", "okta_neha", "neha-kapoor", ["role_engineering_lead"]],
     ["emp_priya", "EMP-1007", "Priya Nair", "priya.nair@tartanhq.com", "Human Resources", "HR Administrator", "M2", "Delhi", "Full-time", "Active", "Meera Iyer", "okta_priya", "priya-nair", ["role_hr_admin"]],
@@ -191,8 +193,8 @@ function assignmentRules() {
       name: "Finance managers M2+",
       roleId: "role_finance_manager",
       source: "HRMS",
-      conditions: "Department = Finance AND Grade >= M2 AND Employment Status = Active",
-      matchingEmployeeIds: ["emp_rahul", "emp_aditi"],
+      conditions: "Department = Finance AND Grade = M2..M4 AND Employment Status = Active",
+      matchingEmployeeIds: ["emp_rahul"],
       lifecycleEvents: ["Joiner", "Mover"],
       priority: 10,
       status: "Active",
@@ -203,8 +205,8 @@ function assignmentRules() {
       name: "Active support team",
       roleId: "role_support_agent",
       source: "HRMS",
-      conditions: "Department = Support AND Employment Status = Active",
-      matchingEmployeeIds: ["emp_sana", "emp_vikram"],
+      conditions: "Department = Support AND Grade < M2 AND Employment Status = Active",
+      matchingEmployeeIds: ["emp_sana"],
       lifecycleEvents: ["Joiner", "Mover", "Leaver"],
       priority: 20,
       status: "Active",
@@ -330,7 +332,7 @@ const observedAccessDeltas = {
     }
   },
   emp_aditi: {
-    add: { conn_zoho: { Payments: { actions: ["Refund payments"] } } }
+    add: { conn_zoho: { Payments: { actions: ["Refund payments"] }, Invoices: { actions: ["Void invoices"] } } }
   },
   emp_sana: {
     add: {
@@ -342,7 +344,7 @@ const observedAccessDeltas = {
     }
   },
   emp_vikram: {
-    add: { conn_jira: { Tickets: { actions: ["Transition ticket"] } } }
+    add: { conn_jira: { Tickets: { actions: ["Delete ticket"] } } }
   },
   emp_ishaan: {
     // Branch protection in GitHub means the merge right the role grants does not actually exist.
@@ -433,11 +435,41 @@ export function createDemoState() {
       source: "HRMS Rule",
       status: "Active",
       assignmentMethod: "Automatic",
-      assignedEmployeeIds: ["emp_rahul", "emp_aditi"],
+      assignedEmployeeIds: ["emp_rahul"],
       permissions: [
         grant(byId.conn_zoho, { Accounts: ["Search accounts", "View accounts", "Export accounts"], Invoices: ["Search invoices", "View invoices", "Create invoices", "Approve invoices", "Export invoices"], Payments: ["Search payments", "View payments", "Approve payments"] }, { resourceScope: { resourceIds: ["entity_india", "accounts_master", "invoices_india", "payments_india"] }, conditions: { approvalRequired: true, approvalAmount: "250000", maxRecords: 1000 }, fieldRestrictions: { "Bank account number": "Masked", "Tax identifier": "Visible", "Payment details": "Masked" } }),
-        grant(byId.conn_drive, { Drives: ["View drive"], Folders: ["View folder", "Share folder"], Files: ["Search files", "View file metadata", "Read file content", "Download file", "Export file"] }, { resourceScope: { resourceIds: ["drive_finance", "folder_india_finance", "folder_audit", "file_invoice_pack", "file_audit_report"] }, provisionToSource: true, sourceProvisioningStatus: "Provisioned in Source", fieldRestrictions: { "External sharing": "Masked" } }),
+        grant(byId.conn_drive, { Drives: ["View drive"], Folders: ["View folder", "Share folder"], Files: ["Search files", "View file metadata", "Read file content", "Download file", "Export file"] }, { resourceScope: { resourceIds: ["drive_finance", "folder_india_finance", "folder_audit", "file_invoice_pack", "file_audit_report"] }, provisionToSource: true, sourceProvisioningStatus: "Provisioned in Source", fieldRestrictions: { "External sharing": "Masked", "File content": "Visible", "File download": "Visible" } }),
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"] }, { resourceScope: { resourceIds: ["space_finance", "page_qbr"] } })
+      ]
+    },
+    {
+      id: "role_finance_director",
+      name: "Finance Director",
+      code: "FIN-DIR",
+      description: "Finance leadership with visibility across every legal entity, including the US books.",
+      owner: "Aditi Rao",
+      source: "HRMS Rule",
+      status: "Active",
+      assignmentMethod: "Automatic",
+      assignedEmployeeIds: ["emp_aditi"],
+      permissions: [
+        grant(byId.conn_zoho, { Accounts: ["Search accounts", "View accounts"], Invoices: ["Search invoices", "View invoices", "Create invoices", "Approve invoices"], Payments: ["Search payments", "View payments", "Approve payments"] }, { resourceScope: { resourceIds: ["entity_india", "entity_us", "accounts_master", "invoices_india", "invoices_us", "payments_india"] }, conditions: { approvalRequired: true, approvalAmount: "1000000", maxRecords: 2000 }, fieldRestrictions: { "Bank account number": "Masked", "Tax identifier": "Visible", "Payment details": "Masked" } }),
+        grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"] }, { resourceScope: { resourceIds: ["space_finance", "page_qbr"] } })
+      ]
+    },
+    {
+      id: "role_support_lead",
+      name: "Support Lead",
+      code: "SUP-LEAD",
+      description: "Support leadership covering both the support and finance ticket queues, including internal triage notes.",
+      owner: "Vikram Sethi",
+      source: "IAM Group",
+      status: "Active",
+      assignmentMethod: "Automatic",
+      assignedEmployeeIds: ["emp_vikram"],
+      permissions: [
+        grant(byId.conn_jira, { Projects: ["View project"], Tickets: ["Search tickets", "View ticket", "Create ticket", "Edit ticket", "Assign ticket", "Transition ticket"], Comments: ["View comments", "Add comments", "View internal comments"], Attachments: ["View attachments", "Download attachments"] }, { resourceScope: { resourceIds: ["jira_support", "tickets_support", "jira_fin", "tickets_finance", "jira_internal_comments"] }, fieldRestrictions: { "Customer personal information": "Masked", "Internal comments": "Visible", "Attachment URLs": "Visible" } }),
+        grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments", "Add comments"] }, { resourceScope: { resourceIds: ["space_support", "page_support_playbook"] } })
       ]
     },
     {
@@ -449,7 +481,7 @@ export function createDemoState() {
       source: "IAM Group",
       status: "Active",
       assignmentMethod: "Mixed",
-      assignedEmployeeIds: ["emp_sana", "emp_vikram"],
+      assignedEmployeeIds: ["emp_sana"],
       permissions: [
         grant(byId.conn_jira, { Projects: ["View project"], Tickets: ["Search tickets", "View ticket", "Create ticket", "Edit ticket", "Assign ticket"], Comments: ["View comments", "Add comments"], Attachments: ["View attachments", "Download attachments"] }, { resourceScope: { resourceIds: ["jira_support", "tickets_support"] }, fieldRestrictions: { "Internal comments": "Hidden", "Attachment URLs": "Masked", "Customer personal information": "Masked" } }),
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments", "Add comments"] }, { resourceScope: { resourceIds: ["space_support", "page_support_playbook"] } })
@@ -496,7 +528,7 @@ export function createDemoState() {
       assignedEmployeeIds: ["emp_kabir", "emp_tanya", "emp_omar"],
       permissions: [
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments"] }, { resourceScope: { resourceIds: ["space_hr", "page_onboarding"] } }),
-        grant(byId.conn_drive, { Folders: ["View folder"], Files: ["Search files", "View file metadata", "Read file content"] }, { resourceScope: { resourceIds: ["folder_policies", "file_policy_handbook"] }, fieldRestrictions: { "File download": "Hidden", "External sharing": "Hidden" } })
+        grant(byId.conn_drive, { Folders: ["View folder"], Files: ["Search files", "View file metadata", "Read file content"] }, { resourceScope: { resourceIds: ["folder_policies", "file_policy_handbook"] }, fieldRestrictions: { "File content": "Visible", "File download": "Hidden", "External sharing": "Hidden" } })
       ]
     },
     {
@@ -540,6 +572,7 @@ export function createDemoState() {
     iamGroups: [
       { id: "grp_finance_mgmt", providerId: "iam_okta", name: "finance-management", members: 9, mappedRoleId: "role_finance_manager" },
       { id: "grp_support_ops", providerId: "iam_okta", name: "support-operations", members: 18, mappedRoleId: "role_support_agent" },
+      { id: "grp_support_leads", providerId: "iam_okta", name: "support-leads", members: 4, mappedRoleId: "role_support_lead" },
       { id: "grp_github_maintainers", providerId: "iam_okta", name: "github-maintainers", members: 7, mappedRoleId: "role_engineering_lead" },
       { id: "grp_all_employees", providerId: "iam_okta", name: "all-employees", members: 142, mappedRoleId: "role_general_employee" }
     ],

@@ -455,22 +455,38 @@ function renderChatEntry(entry, index) {
 }
 
 function renderSourceCard(source) {
+  const maxRows = 6;
+  const shown = source.rows.slice(0, maxRows);
   return `
-    <div class="source-card">
+    <div class="source-card wide-source">
       <div class="source-card-head">
-        <strong>${esc(source.title)}</strong>
-        <span class="badge allow">Allowed</span>
+        <div>
+          <strong>${esc(source.title)}</strong>
+          <span class="source-origin">${esc(source.tool)} · ${esc(source.connectionName)} · ${esc(source.action)}</span>
+        </div>
+        <span class="badge allow">${esc(source.recordCount)} of ${esc(source.totalRecordCount)} records</span>
       </div>
-      <span class="source-origin">${esc(source.tool)} · ${esc(source.connectionName)} · ${esc(source.action)}</span>
-      <dl class="source-fields">
-        ${source.fields.map((item) => `
-          <div class="${item.masked ? "masked" : ""}">
-            <dt>${esc(item.label)}</dt>
-            <dd>${esc(item.value)}${item.masked ? ` ${tip("This field is released in masked form by your role's field obligations. The raw value was never loaded into the answer.", "end")}` : ""}</dd>
-          </div>
-        `).join("")}
-      </dl>
-      ${source.hiddenFields.length ? `<span class="source-withheld">${icon("lock")} Withheld: ${esc(source.hiddenFields.join(", "))}</span>` : ""}
+      ${source.metrics.length ? `
+        <div class="source-metrics">
+          ${source.metrics.map((metric) => `<div><span>${esc(metric.label)}</span><strong>${esc(metric.value)}</strong></div>`).join("")}
+        </div>
+      ` : ""}
+      <div class="source-scope">
+        <span>In scope: ${esc(source.permittedResources.join(", "))}</span>
+        ${source.withheldRecordCount ? `<span class="withheld-note">${icon("lock")} ${esc(source.withheldRecordCount)} record${source.withheldRecordCount === 1 ? "" : "s"} withheld ${tip(`These rows sit in ${source.excludedResources.map((item) => item.resourceName).join(", ") || "resources outside your scope"} and were never read. Aggregates above are computed from your permitted rows only.`, "end")}</span>` : ""}
+      </div>
+      ${shown.length ? `
+        <div class="table-wrap tight">
+          <table class="record-table">
+            <thead><tr>${source.columns.map((column) => `<th>${esc(column)}</th>`).join("")}</tr></thead>
+            <tbody>
+              ${shown.map((row) => `<tr>${row.cells.map((cell) => `<td class="${cell.masked ? "masked" : ""}">${esc(cell.value)}</td>`).join("")}</tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        ${source.rows.length > maxRows ? `<span class="source-more">+ ${esc(source.rows.length - maxRows)} more permitted row${source.rows.length - maxRows === 1 ? "" : "s"}</span>` : ""}
+      ` : ""}
+      ${source.hiddenFields.length ? `<span class="source-withheld">${icon("lock")} Fields withheld: ${esc(source.hiddenFields.join(", "))}</span>` : ""}
       <span class="source-fetch">${esc(source.fetchMode)} ${tip(source.fetchNote)}</span>
     </div>
   `;

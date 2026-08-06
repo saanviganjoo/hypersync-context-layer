@@ -2129,6 +2129,96 @@ code {
   margin-top: 14px;
 }
 
+.source-grid:has(.wide-source) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.wide-source .source-card-head {
+  align-items: flex-start;
+}
+
+.wide-source .source-origin {
+  display: block;
+  margin-top: 2px;
+}
+
+.source-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.source-metrics > div {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.source-metrics span {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.source-metrics strong {
+  display: block;
+  font-size: 16px;
+  margin-top: 2px;
+}
+
+.source-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.source-scope .withheld-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--amber);
+}
+
+.source-scope .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.record-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.record-table th,
+.record-table td {
+  text-align: left;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--line-soft);
+  white-space: nowrap;
+}
+
+.record-table th {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.record-table td.masked {
+  color: var(--amber);
+  letter-spacing: 0.04em;
+}
+
+.source-more {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
 .source-card {
   border: 1px solid var(--line-soft);
   border-radius: 8px;

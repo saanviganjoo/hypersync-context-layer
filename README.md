@@ -31,14 +31,31 @@ Partial answers are always **disclosed, never silently truncated** — quietly d
 
 ## Try these
 
-Switch identity with the **Asking as** selector on the Context Layer:
+Each connected tool holds its own record set (`src/datasets.js`). Answers are **computed from only the rows the asker may read**, so the same question returns different — and individually correct — numbers.
+
+Switch identity with the **Asking as** selector on the Context Layer.
+
+**Ask the same question as two people:**
+
+| Ask as | *What is our invoice and collections position?* |
+|---|---|
+| Rahul Menon (Finance Manager) | **8 invoices · ₹1.65 Cr · ₹44.25 L overdue** — India entity only, 4 records withheld |
+| Aditi Rao (Finance Director) | **12 invoices · ₹3.99 Cr · ₹1.40 Cr overdue** — India + US entities |
+
+| Ask as | *How many open tickets do we have?* |
+|---|---|
+| Sana Khan (Support Agent) | **9 open · 2 breaching SLA** — support queue only; internal comments withheld, customer PII masked |
+| Vikram Sethi (Support Lead) | **14 open · 3 breaching SLA** — support + finance queues; internal comments visible |
+
+Neither number is wrong. Each is the correct answer *for that person's access*, and the answer says so rather than presenting a partial total as complete.
+
+**Other behaviours worth seeing:**
 
 | Ask as | Question | What the engine does |
 |---|---|---|
-| Rahul Menon (Finance Manager) | *What is our invoice and collections position this quarter?* | Answers from Zoho Books + Confluence; masks the bank account number; discloses the excluded Jira source |
-| Sana Khan (Support Agent) | *What are our top support tickets?* | Answers from Jira + the support KB; masks customer PII and attachment URLs; withholds internal comments |
-| Priya Nair (HR Administrator) | *Show me compensation bands by grade* | **Denies until a reason is entered** — her role is reason-required. With a reason: salary visible, bank details withheld, identity numbers masked |
-| Jia Fernandes (Contractor) | *Show me the on-call runbook* | Returns file metadata only; file content is withheld entirely |
+| Priya Nair (HR Administrator) | *Show me compensation bands by grade* | **Denies until a reason is entered** — her role is reason-required. With a reason: median CTC computed, bank details withheld, identity numbers masked |
+| Jia Fernandes (Contractor) | *Show me the on-call runbook* | Returns the file row — title, size, updated — with **file content withheld entirely** |
+| Kabir Sharma (General Employee) | *What is our invoice position?* | No answer assembled; both matching sources excluded by the Decision Service |
 
 Then turn the permissions layer **off** on the Dashboard and re-ask anything — the Context Layer, the Access Simulator and the agent gateway all go default-deny together, because they share one engine.
 
@@ -61,7 +78,8 @@ Then open http://localhost:4173.
 | File | Responsibility |
 |---|---|
 | `src/evaluator.js` | The Decision Service — the four-step check for both people and agents, plus lifecycle simulation |
-| `src/context.js` | Cross-tool document corpus and the permission-aware answer engine |
+| `src/datasets.js` | Each tool's record set — the dummy database the answers are computed from |
+| `src/context.js` | Permission-aware retrieval: one decision per resource, then aggregation over permitted rows only |
 | `src/state.js` | Seed data, the permission model, and the `localStorage`-backed store |
 | `src/catalogue.js` | Tool capability catalogue — resource types, actions and their risk tiers |
 | `src/app.js` | Router, rendering and all interaction handling |
