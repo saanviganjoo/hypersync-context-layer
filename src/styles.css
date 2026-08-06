@@ -939,6 +939,17 @@ tbody tr:hover {
   font-size: 13px;
 }
 
+.chip-list.two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 24px;
+}
+
+@media (max-width: 900px) {
+  .chip-list.two-col {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .conditions {
   display: flex;
   flex-wrap: wrap;

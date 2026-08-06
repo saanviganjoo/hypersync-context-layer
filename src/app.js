@@ -1957,7 +1957,7 @@ function ensureRoleWizard(data) {
 
 function renderRoleWizard(data) {
   const wizard = ensureRoleWizard(data);
-  const steps = ["Role Details", "Assignment Method", "Tools and Scope", "Permissions", "Restrictions", "Review and Publish"];
+  const steps = ["Role Details", "Assignment Method", "Tools and Scope", "Permissions", "Field Obligations", "Review and Publish"];
   return `
     <div class="modal-backdrop">
       <div class="modal xl" role="dialog" aria-modal="true">
@@ -2183,34 +2183,23 @@ function renderDraftMatrix(connection, matrix) {
 function renderRoleStepRestrictions(data, draft) {
   const selectedCategories = [...new Set(draft.connectionIds.map((idValue) => byId(data.connections, idValue)?.category).filter(Boolean))];
   const fields = [...new Set(selectedCategories.flatMap((category) => fieldRestrictionCatalogue[category] || []))];
+  const modes = ["Visible", "Masked", "Hidden", "Aggregate Only"];
   return `
-    <div class="grid-two">
-      <div class="subsection">
-        <h3>Explicit Denies and Field Masking</h3>
-        <div class="chip-list">
+    <div class="subsection">
+      <h3>Field Obligations ${tip("Obligations ride along with every Allow this role produces. Visible releases the value, Masked redacts it, Hidden never loads it, and Aggregate Only permits totals but no row-level detail. Anything left at Hidden stays withheld from answers and exports.")}</h3>
+      <p class="muted">Only the sensitive fields belonging to the tools you selected are listed. Everything else is returned as-is.</p>
+      ${fields.length ? `
+        <div class="chip-list two-col">
           ${fields.map((field) => `
-            <label><span>${esc(field)}</span><select data-action="draft-field-restriction" data-field="${esc(field)}">${["Visible", "Masked", "Hidden", "Aggregate Only"].map((mode) => `<option ${draft.fieldRestrictions[field] === mode ? "selected" : ""}>${mode}</option>`).join("")}</select></label>
-          `).join("") || `<p class="muted">Select a connection to see field-level options.</p>`}
+            <label>
+              <span>${esc(field)}</span>
+              <select data-action="draft-field-restriction" data-field="${esc(field)}">
+                ${modes.map((mode) => `<option value="${esc(mode)}" ${draft.fieldRestrictions[field] === mode ? "selected" : ""}>${esc(mode)}</option>`).join("")}
+              </select>
+            </label>
+          `).join("")}
         </div>
-      </div>
-      <div class="subsection">
-        <h3>Runtime Conditions</h3>
-        <div class="form-grid two">
-          <label class="check-line"><input type="checkbox" data-bind="role.conditions.exportAllowed" ${draft.conditions.exportAllowed ? "checked" : ""} /> Export allowed</label>
-          <label class="check-line"><input type="checkbox" data-bind="role.conditions.externalSharingAllowed" ${draft.conditions.externalSharingAllowed ? "checked" : ""} /> External sharing allowed</label>
-          <label class="check-line"><input type="checkbox" data-bind="role.conditions.approvalRequired" ${draft.conditions.approvalRequired ? "checked" : ""} /> Approval required before write actions</label>
-          <label class="check-line"><input type="checkbox" data-bind="role.conditions.managedDeviceRequired" ${draft.conditions.managedDeviceRequired ? "checked" : ""} /> Managed-device requirement</label>
-          <label class="check-line"><input type="checkbox" data-bind="role.conditions.temporaryAccess" ${draft.conditions.temporaryAccess ? "checked" : ""} /> Temporary access</label>
-          <label class="check-line"><input type="checkbox" data-bind="role.conditions.reasonRequired" ${draft.conditions.reasonRequired ? "checked" : ""} /> Reason required before sensitive action</label>
-          ${fieldInput("role.conditions.maxRecords", "Maximum records per request", draft.conditions.maxRecords, "number")}
-          ${fieldInput("role.conditions.maxExportSize", "Maximum export size", draft.conditions.maxExportSize)}
-          ${fieldInput("role.conditions.approvalAmount", "Approval above amount", draft.conditions.approvalAmount)}
-          ${fieldInput("role.conditions.effectiveDate", "Effective date", draft.conditions.effectiveDate, "date")}
-          ${fieldInput("role.conditions.expiryDate", "Expiry date", draft.conditions.expiryDate, "date")}
-          ${fieldSelect("role.conditions.location", "Location restriction", ["Any", ...new Set(data.employees.map((employee) => employee.location))], draft.conditions.location)}
-          ${fieldSelect("role.conditions.employmentStatus", "Employment-status restriction", ["Any", "Active", "Inactive", "Terminated"], draft.conditions.employmentStatus)}
-        </div>
-      </div>
+      ` : `<div class="empty-state small">Select a connection on the Tools and Scope step to see its field-level options.</div>`}
     </div>
   `;
 }
@@ -2516,6 +2505,9 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (!actionButtonEl) return;
+  // A <select> is driven by its change event. preventDefault here stops the native
+  // option list from ever opening, and re-rendering on click replaces the element.
+  if (event.target.closest("select")) return;
   event.preventDefault();
   event.stopPropagation();
   handleAction(actionButtonEl);
