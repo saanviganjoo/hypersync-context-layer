@@ -9,6 +9,19 @@ import {
 
 export const STORAGE_KEY = "hypersync_permissions_state_v1";
 
+/**
+ * Bump whenever the seeded demo data changes shape — new roles, new resources,
+ * renamed fields. A returning visitor's saved state is the *old* seed, and stale
+ * seed data reads as a broken build (empty columns, missing roles) rather than as
+ * a cache artefact. On a mismatch the saved state is replaced, not migrated:
+ * migrating field names would still leave the visitor without the new roles and
+ * resources the demo depends on.
+ *
+ * This does discard local edits made against an older seed, which is the right
+ * trade for a prototype whose seed data *is* the demo.
+ */
+export const SEED_VERSION = 3;
+
 const now = () => new Date().toISOString();
 const daysAgo = (days) => new Date(Date.now() - days * 86400000).toISOString();
 const id = (prefix) => `${prefix}_${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
@@ -559,6 +572,7 @@ export function createDemoState() {
 
   return {
     version: 1,
+    seedVersion: SEED_VERSION,
     generatedAt: now(),
     corporate: { id: "corp_tartan", name: "TartanHQ India", referenceId: "TARTAN-IN-001" },
     currentUser: { name: "Saanvi", email: "saanvi@tartanhq.com" },
@@ -632,7 +646,13 @@ function load() {
     return demo;
   }
   try {
-    return normalizeState(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    if (parsed?.seedVersion !== SEED_VERSION) {
+      const demo = createDemoState();
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(demo));
+      return demo;
+    }
+    return normalizeState(parsed);
   } catch {
     return createDemoState();
   }
