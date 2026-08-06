@@ -389,7 +389,7 @@ td small {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
   gap: 12px;
   margin: 16px 0;
   align-items: end;
@@ -2654,4 +2654,9 @@ code {
   .modal-backdrop {
     padding: 12px;
   }
+}
+
+.step-note {
+  margin-bottom: 12px;
+  max-width: 78ch;
 }

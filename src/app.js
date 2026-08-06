@@ -20,6 +20,9 @@ import {
   createRoleFromDraft,
   deleteRole,
   duplicateRole,
+  MEMBERSHIP_KINDS,
+  membershipFromMethods,
+  ROLE_ORIGINS,
   store,
   syncIamProvider,
   toggleAgentStatus,
@@ -34,7 +37,7 @@ const toastRoot = document.querySelector("#toast-root");
 
 const stateful = {
   filters: {
-    roles: { q: "", source: "", status: "", category: "", tool: "" },
+    roles: { q: "", origin: "", membership: "", status: "", category: "", tool: "" },
     employees: { q: "", department: "", designation: "", role: "", status: "", source: "" }
   },
   modal: null,
@@ -664,7 +667,8 @@ function renderRolesTab(data) {
   const filters = stateful.filters.roles;
   const filtered = data.roles
     .filter((role) => !filters.q || `${role.name} ${role.code}`.toLowerCase().includes(filters.q.toLowerCase()))
-    .filter((role) => !filters.source || role.source === filters.source)
+    .filter((role) => !filters.origin || role.origin === filters.origin)
+    .filter((role) => !filters.membership || (role.membership || []).includes(filters.membership))
     .filter((role) => !filters.status || role.status === filters.status)
     .filter((role) => !filters.category || role.permissions.some((permission) => permission.category === filters.category))
     .filter((role) => !filters.tool || role.permissions.some((permission) => permission.tool === filters.tool))
@@ -679,7 +683,8 @@ function renderRolesTab(data) {
       </div>
       <div class="filters">
         ${searchInput("roles.q", "Search roles", filters.q)}
-        ${selectInput("roles.source", "Role source", ["", "IAM Group", "HRMS Rule", "CSV Import", "Manually Created", "System Defined"], filters.source)}
+        ${selectInput("roles.origin", "Origin", ["", ...ROLE_ORIGINS], filters.origin)}
+        ${selectInput("roles.membership", "Membership", ["", ...MEMBERSHIP_KINDS], filters.membership)}
         ${selectInput("roles.status", "Status", ["", "Active", "Draft", "Disabled"], filters.status)}
         ${selectInput("roles.category", "Category", ["", ...categories.map((category) => category.label)], filters.category)}
         ${selectInput("roles.tool", "Connected tool", ["", ...new Set(data.connections.map((connection) => connection.sourceTool))], filters.tool)}
@@ -689,10 +694,10 @@ function renderRolesTab(data) {
           <thead>
             <tr>
               <th>Role Name</th>
-              <th>Role Source</th>
+              <th>Origin ${tip("How this role definition came to exist. Tool sync can only ever be an origin — it reads what already exists, so it can propose a role but cannot decide who joins it later.")}</th>
+              <th>Membership ${tip("How people end up in this role. IAM carries membership through groups; HRMS supplies the attributes a rule matches on. Neither defines what the role may do.")}</th>
               <th>Assigned Employees</th>
               <th>Connected Tools</th>
-              <th>Assignment Method</th>
               <th>Status</th>
               <th>Last Updated</th>
               <th>Actions</th>
@@ -702,10 +707,10 @@ function renderRolesTab(data) {
             ${filtered.map((role) => `
               <tr class="clickable-row" data-route="/permissions/roles/${role.id}">
                 <td><strong>${esc(role.name)}</strong><small>${esc(role.code)}</small></td>
-                <td>${badge(role.source, "neutral")}</td>
+                <td>${badge(role.origin, role.origin === "Suggested from tool sync" ? "allow" : "neutral")}</td>
+                <td>${(role.membership || []).map((kind) => badge(kind, "neutral")).join(" ") || badge("Manual list", "neutral")}</td>
                 <td>${role.assignedEmployeeIds.length}</td>
                 <td>${esc([...new Set(role.permissions.map((permission) => permission.tool))].join(", ") || "No tools")}</td>
-                <td>${esc(role.assignmentMethod)}</td>
                 <td>${badge(role.status, role.status === "Active" ? "active" : role.status === "Draft" ? "draft" : "disabled")}</td>
                 <td>${formatDate(role.updatedAt)}</td>
                 <td>
@@ -714,7 +719,7 @@ function renderRolesTab(data) {
                     <button title="Edit role" data-action="edit-role" data-id="${role.id}">${icon("edit")}</button>
                     <button title="Duplicate role" data-action="duplicate-role" data-id="${role.id}">${icon("copy")}</button>
                     <button title="${role.status === "Disabled" ? "Enable" : "Disable"} role" data-action="confirm-toggle-role" data-id="${role.id}">${icon("bolt")}</button>
-                    <button title="Delete role" data-action="confirm-delete-role" data-id="${role.id}" ${role.source === "System Defined" ? "disabled aria-label='System-defined roles cannot be deleted'" : ""}>${icon("trash")}</button>
+                    <button title="Delete role" data-action="confirm-delete-role" data-id="${role.id}" ${role.origin === "System defined" ? "disabled aria-label='System-defined roles cannot be deleted'" : ""}>${icon("trash")}</button>
                     <button class="link-btn" data-route="/permissions/roles/${role.id}?tab=audit">Audit</button>
                   </div>
                 </td>
@@ -766,7 +771,7 @@ function renderEmployeesTab(data) {
         ${selectInput("employees.designation", "Designation", ["", ...new Set(data.employees.map((employee) => employee.designation))], filters.designation)}
         ${selectInput("employees.role", "Role", ["", ...roleOptions], filters.role)}
         ${selectInput("employees.status", "Status", ["", "Active", "Pending Evaluation", "Partially Configured", "Revoked"], filters.status)}
-        ${selectInput("employees.source", "Assignment source", ["", "HRMS Rule", "IAM Group", "Manual", "CSV Import"], filters.source)}
+        ${selectInput("employees.source", "Membership", ["", ...MEMBERSHIP_KINDS], filters.source)}
       </div>
       <div class="table-wrap">
         <table>
@@ -1085,7 +1090,7 @@ function renderRoleDetails(data, roleId, activeTab) {
         <div>
           <h2>${esc(role.name)}</h2>
           <p>${esc(role.description)}</p>
-          <div class="inline-badges">${badge(role.source, "neutral")} ${badge(role.status, role.status === "Active" ? "active" : role.status === "Draft" ? "draft" : "disabled")}</div>
+          <div class="inline-badges">${badge(role.origin, "neutral")} ${badge(role.status, role.status === "Active" ? "active" : role.status === "Draft" ? "draft" : "disabled")}</div>
         </div>
         <div class="page-actions compact">
           ${actionButton("Edit Role", "edit-role", "secondary", `data-id="${role.id}"`)}
@@ -1118,7 +1123,8 @@ function renderRoleOverview(data, role) {
           ${definition("Role name", role.name)}
           ${definition("Role code", role.code)}
           ${definition("Role owner", role.owner)}
-          ${definition("Role source", role.source)}
+          ${definition("Origin", role.origin)}
+          ${definition("Membership", (role.membership || []).join(", ") || "Manual list")}
           ${definition("Current corporate", role.currentCorporate)}
           ${definition("Creation date", formatDate(role.createdAt))}
           ${definition("Last updated", formatDate(role.updatedAt))}
@@ -1896,7 +1902,7 @@ function emptyRoleDraft(data) {
     code: "",
     description: "",
     owner: data.currentUser.name,
-    source: "Manually Created",
+    origin: "Created manually",
     status: "Active",
     currentCorporate: data.corporate.name,
     assignmentMethods: ["Add Employees Manually"],
@@ -1938,7 +1944,7 @@ function roleDraftFromRole(data, role) {
     code: role.code,
     description: role.description,
     owner: role.owner,
-    source: role.source,
+    origin: role.origin,
     status: role.status,
     employeeIds: [...role.assignedEmployeeIds],
     connectionIds: role.permissions.map((permission) => permission.connectionId),
@@ -1957,7 +1963,7 @@ function ensureRoleWizard(data) {
 
 function renderRoleWizard(data) {
   const wizard = ensureRoleWizard(data);
-  const steps = ["Role Details", "Assignment Method", "Tools and Scope", "Permissions", "Field Obligations", "Review and Publish"];
+  const steps = ["Role Details", "Membership", "Tools and Scope", "Permissions", "Field Obligations", "Review and Publish"];
   return `
     <div class="modal-backdrop">
       <div class="modal xl" role="dialog" aria-modal="true">
@@ -2000,6 +2006,7 @@ function renderRoleStepAssignments(data, draft) {
   const matched = previewEmployees(data, draft);
   draft.previewEmployeeIds = matched.map((employee) => employee.id);
   return `
+    <p class="muted step-note">How do people end up in this role? Pick one or more. This decides <strong>membership only</strong> — it does not change what the role may do, and it is separate from where the role definition came from.</p>
     <div class="check-grid compact">
       ${methods.map((method) => `<label class="check-card"><input type="checkbox" data-action="role-assignment-method" value="${method}" ${draft.assignmentMethods.includes(method) ? "checked" : ""} /><span>${method}</span></label>`).join("")}
     </div>
@@ -2212,7 +2219,8 @@ function renderRoleStepReview(data, draft) {
   return `
     <div class="review-grid">
       ${definition("Role details", `${draft.name || "Untitled"} (${draft.code || "No code"})`)}
-      ${definition("Assignment methods", draft.assignmentMethods.join(", "))}
+      ${definition("Membership", membershipFromMethods(draft.assignmentMethods).join(", "))}
+      ${definition("Origin", "Created manually")}
       ${definition("Matching employees", new Set([...draft.employeeIds, ...draft.previewEmployeeIds, ...draft.csvRows.filter((row) => row.valid).map((row) => row.employeeId)]).size)}
       ${definition("Selected categories", [...new Set(selectedConnections.map((connection) => connection.category))].join(", ") || "None")}
       ${definition("Selected tools", [...new Set(selectedConnections.map((connection) => connection.sourceTool))].join(", ") || "None")}
@@ -3134,7 +3142,7 @@ function confirmImport(data) {
     modal.rows.filter((row) => row.valid).forEach((row) => {
       let role = draft.roles.find((item) => item.code === row.role_code);
       if (!role && modal.importType === "Roles and Employee Assignments") {
-        role = createRoleFromDraft(draft, { name: row.role_name || row.role_code, code: row.role_code, employeeIds: [], connectionIds: [], assignmentMethod: "Manual", source: "CSV Import" }, "Draft");
+        role = createRoleFromDraft(draft, { name: row.role_name || row.role_code, code: row.role_code, employeeIds: [], connectionIds: [], assignmentMethods: ["Upload CSV"], origin: "Imported" }, "Draft");
       }
       if (role && modal.importType === "Roles and Employee Assignments") addEmployeesToRole(draft, role.id, [row.employeeId]);
       if (role && modal.importType === "Role Permission Mapping") {

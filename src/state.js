@@ -180,7 +180,7 @@ function employees() {
       githubUsername
     },
     roleIds,
-    assignmentSource: roleIds.includes("role_contractor") ? "CSV Import" : "HRMS Rule",
+    assignmentSource: roleIds.includes("role_contractor") ? "CSV list" : "HRMS attribute rule",
     accessStatus: employmentStatus === "Active" ? "Active" : "Revoked",
     lastEvaluated: daysAgo(roleIds.includes("role_contractor") ? 4 : 1)
   }));
@@ -432,9 +432,9 @@ export function createDemoState() {
       code: "FIN-MGR",
       description: "Finance leaders who can review finance records and manage approval workflows.",
       owner: "Aditi Rao",
-      source: "HRMS Rule",
+      origin: "Created manually",
+      membership: ["HRMS attribute rule"],
       status: "Active",
-      assignmentMethod: "Automatic",
       assignedEmployeeIds: ["emp_rahul"],
       permissions: [
         grant(byId.conn_zoho, { Accounts: ["Search accounts", "View accounts", "Export accounts"], Invoices: ["Search invoices", "View invoices", "Create invoices", "Approve invoices", "Export invoices"], Payments: ["Search payments", "View payments", "Approve payments"] }, { resourceScope: { resourceIds: ["entity_india", "accounts_master", "invoices_india", "payments_india"] }, conditions: { approvalRequired: true, approvalAmount: "250000", maxRecords: 1000 }, fieldRestrictions: { "Bank account number": "Masked", "Tax identifier": "Visible", "Payment details": "Masked" } }),
@@ -448,9 +448,9 @@ export function createDemoState() {
       code: "FIN-DIR",
       description: "Finance leadership with visibility across every legal entity, including the US books.",
       owner: "Aditi Rao",
-      source: "HRMS Rule",
+      origin: "Created manually",
+      membership: ["HRMS attribute rule"],
       status: "Active",
-      assignmentMethod: "Automatic",
       assignedEmployeeIds: ["emp_aditi"],
       permissions: [
         grant(byId.conn_zoho, { Accounts: ["Search accounts", "View accounts"], Invoices: ["Search invoices", "View invoices", "Create invoices", "Approve invoices"], Payments: ["Search payments", "View payments", "Approve payments"] }, { resourceScope: { resourceIds: ["entity_india", "entity_us", "accounts_master", "invoices_india", "invoices_us", "payments_india"] }, conditions: { approvalRequired: true, approvalAmount: "1000000", maxRecords: 2000 }, fieldRestrictions: { "Bank account number": "Masked", "Tax identifier": "Visible", "Payment details": "Masked" } }),
@@ -463,9 +463,9 @@ export function createDemoState() {
       code: "SUP-LEAD",
       description: "Support leadership covering both the support and finance ticket queues, including internal triage notes.",
       owner: "Vikram Sethi",
-      source: "IAM Group",
+      origin: "Created manually",
+      membership: ["IAM group"],
       status: "Active",
-      assignmentMethod: "Automatic",
       assignedEmployeeIds: ["emp_vikram"],
       permissions: [
         grant(byId.conn_jira, { Projects: ["View project"], Tickets: ["Search tickets", "View ticket", "Create ticket", "Edit ticket", "Assign ticket", "Transition ticket"], Comments: ["View comments", "Add comments", "View internal comments"], Attachments: ["View attachments", "Download attachments"] }, { resourceScope: { resourceIds: ["jira_support", "tickets_support", "jira_fin", "tickets_finance", "jira_internal_comments"] }, fieldRestrictions: { "Customer personal information": "Masked", "Internal comments": "Visible", "Attachment URLs": "Visible" } }),
@@ -478,9 +478,9 @@ export function createDemoState() {
       code: "SUP-AGT",
       description: "Frontline support staff with scoped ticket and knowledge-base access.",
       owner: "Vikram Sethi",
-      source: "IAM Group",
+      origin: "Created manually",
+      membership: ["IAM group", "Manual list"],
       status: "Active",
-      assignmentMethod: "Mixed",
       assignedEmployeeIds: ["emp_sana"],
       permissions: [
         grant(byId.conn_jira, { Projects: ["View project"], Tickets: ["Search tickets", "View ticket", "Create ticket", "Edit ticket", "Assign ticket"], Comments: ["View comments", "Add comments"], Attachments: ["View attachments", "Download attachments"] }, { resourceScope: { resourceIds: ["jira_support", "tickets_support"] }, fieldRestrictions: { "Internal comments": "Hidden", "Attachment URLs": "Masked", "Customer personal information": "Masked" } }),
@@ -493,9 +493,9 @@ export function createDemoState() {
       code: "ENG-LEAD",
       description: "Engineering owners who review code, merge pull requests and manage engineering spaces.",
       owner: "Neha Kapoor",
-      source: "IAM Group",
+      origin: "Created manually",
+      membership: ["IAM group"],
       status: "Active",
-      assignmentMethod: "Automatic",
       assignedEmployeeIds: ["emp_ishaan", "emp_neha"],
       permissions: [
         grant(byId.conn_github, { Organizations: ["View organization"], Repositories: ["View repository", "Read code", "Push code", "Manage repository"], Issues: ["View issue", "Create issue", "Edit issue", "Close issue"], "Pull Requests": ["View pull request", "Create pull request", "Review pull request", "Merge pull request"] }, { resourceScope: { resourceIds: ["org_tartanhq", "repo_frontend", "repo_backend", "repo_internal", "gh_prs"] }, provisionToSource: true, sourceProvisioningStatus: "Pending Provisioning" }),
@@ -508,9 +508,9 @@ export function createDemoState() {
       code: "HR-ADMIN",
       description: "HR operations administrators with employee data access and restricted compensation controls.",
       owner: "Priya Nair",
-      source: "Manually Created",
+      origin: "Created manually",
+      membership: ["Manual list"],
       status: "Active",
-      assignmentMethod: "Manual",
       assignedEmployeeIds: ["emp_priya"],
       permissions: [
         grant(byId.conn_darwinbox, { Employees: ["Search employees", "View employee profile", "View employment information", "View compensation", "Update employee profile", "Export employee data"], Employment: ["Read metadata", "Read content", "Update"], Attendance: ["Search", "Read content", "Aggregate"] }, { resourceScope: { resourceIds: ["emp_all", "emp_hr", "emp_finance", "attendance_all"] }, fieldRestrictions: { Salary: "Visible", "Bank details": "Hidden", "Identity numbers": "Masked", "Personal address": "Masked" }, conditions: { managedDeviceRequired: true, reasonRequired: true } })
@@ -522,9 +522,9 @@ export function createDemoState() {
       code: "EMP-GEN",
       description: "System-defined baseline access to employee policies and self-service knowledge.",
       owner: "System",
-      source: "System Defined",
+      origin: "System defined",
+      membership: ["HRMS attribute rule"],
       status: "Active",
-      assignmentMethod: "Automatic",
       assignedEmployeeIds: ["emp_kabir", "emp_tanya", "emp_omar"],
       permissions: [
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments"] }, { resourceScope: { resourceIds: ["space_hr", "page_onboarding"] } }),
@@ -537,9 +537,9 @@ export function createDemoState() {
       code: "CONTRACTOR",
       description: "Restricted external-worker access with explicit deny on exports and sharing.",
       owner: "Priya Nair",
-      source: "CSV Import",
+      origin: "Imported",
+      membership: ["CSV list"],
       status: "Active",
-      assignmentMethod: "Manual",
       assignedEmployeeIds: ["emp_jia", "emp_rohan"],
       permissions: [
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"] }, { resourceScope: { resourceIds: ["space_engineering", "space_support", "page_eng_architecture"] }, conditions: { exportAllowed: false, externalSharingAllowed: false, maxRecords: 50, expiryDate: "2026-09-30" } }),
@@ -747,6 +747,29 @@ export function createConnectionFromDraft(draft, form) {
   return connection;
 }
 
+/**
+ * Two orthogonal facts about a role, deliberately kept apart:
+ *   origin     — how the definition came to exist (stamped, not chosen)
+ *   membership — how people end up in it (chosen on the Assignment step)
+ * Tool sync can only ever be an origin: it is a read, so it can propose a role
+ * from observed access but cannot decide who joins tomorrow. IAM is the reverse —
+ * it carries membership, and never defines what a role may do.
+ */
+export const ROLE_ORIGINS = ["Suggested from tool sync", "Created manually", "Imported", "System defined"];
+export const MEMBERSHIP_KINDS = ["IAM group", "HRMS attribute rule", "Manual list", "CSV list"];
+
+const METHOD_TO_MEMBERSHIP = {
+  "IAM Group": "IAM group",
+  "HRMS Attribute Rule": "HRMS attribute rule",
+  "Add Employees Manually": "Manual list",
+  "Upload CSV": "CSV list"
+};
+
+export function membershipFromMethods(methods = []) {
+  const mapped = [...new Set(methods.map((method) => METHOD_TO_MEMBERSHIP[method]).filter(Boolean))];
+  return mapped.length ? mapped : ["Manual list"];
+}
+
 export function createRoleFromDraft(draft, form, status = "Active") {
   const roleId = form.id || id("role");
   const selectedConnectionIds = form.connectionIds?.length ? form.connectionIds : [];
@@ -757,9 +780,10 @@ export function createRoleFromDraft(draft, form, status = "Active") {
     code: form.code,
     description: form.description || "",
     owner: form.owner || draft.currentUser.name,
-    source: form.source || "Manually Created",
+    // Origin is stamped, never chosen — nobody picks their own provenance.
+    origin: form.origin || "Created manually",
+    membership: membershipFromMethods(form.assignmentMethods),
     status,
-    assignmentMethod: form.assignmentMethod || "Manual",
     corporateId: draft.corporate.id,
     currentCorporate: draft.corporate.name,
     createdAt: form.createdAt || now(),
@@ -805,7 +829,7 @@ export function duplicateRole(draft, roleId) {
   copy.id = id("role");
   copy.name = `${role.name} Copy`;
   copy.code = `${role.code}-COPY`;
-  copy.source = "Manually Created";
+  copy.origin = "Created manually";
   copy.status = "Draft";
   copy.createdAt = now();
   copy.updatedAt = now();
@@ -829,7 +853,7 @@ export function toggleRoleStatus(draft, roleId) {
 
 export function deleteRole(draft, roleId) {
   const role = draft.roles.find((item) => item.id === roleId);
-  if (!role || role.source === "System Defined") return false;
+  if (!role || role.origin === "System defined") return false;
   draft.roles = draft.roles.filter((item) => item.id !== roleId);
   draft.employees.forEach((employee) => {
     employee.roleIds = employee.roleIds.filter((item) => item !== roleId);
