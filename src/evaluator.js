@@ -2,6 +2,14 @@ import { getActionsForResource } from "./catalogue.js";
 
 const normalize = (value) => String(value || "").trim().toLowerCase();
 
+function formatObservedAt(state) {
+  if (!state.ceilingSyncedAt) return "at last sync";
+  const hours = (Date.now() - new Date(state.ceilingSyncedAt).getTime()) / 3600000;
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m ago`;
+  if (hours < 48) return `${Math.round(hours)}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
 function connectionMatches(grant, input) {
   if (input.connectionId && grant.connectionId !== input.connectionId) return false;
   if (input.category && normalize(grant.category) !== normalize(input.category)) return false;
@@ -38,6 +46,30 @@ function conditionMatches(grant, employee, runtimeContext = {}) {
 function supportedBySource(tool, resourceType, actionName) {
   const actions = getActionsForResource(tool, resourceType);
   return actions.find((action) => action.name === actionName)?.supported !== false;
+}
+
+/**
+ * The observed native access ("ceiling") for one identity on one resource type —
+ * what the connector last read out of the tool itself. Effective access is always
+ * intersected with this, so no policy can widen access beyond the source system.
+ */
+export function observedAccessFor(state, employeeId, connectionId, resourceType) {
+  const rows = state.observedAccess?.[employeeId] || [];
+  return rows.find((row) => row.connectionId === connectionId && row.resourceType === resourceType) || null;
+}
+
+export function observedRowsFor(state, employeeId) {
+  return state.observedAccess?.[employeeId] || [];
+}
+
+function ceilingCheck(state, employeeId, input) {
+  const row = observedAccessFor(state, employeeId, input.connectionId, input.resourceType);
+  if (!row) return { ok: false, reason: `no native access to ${input.resourceType} in this tool` };
+  if (!row.actions.includes(input.action)) return { ok: false, reason: `the tool does not grant "${input.action}" to this account` };
+  if (input.resourceId && row.resourceIds.length && !row.resourceIds.includes(input.resourceId)) {
+    return { ok: false, reason: "the tool does not grant this account access to that specific resource" };
+  }
+  return { ok: true, reason: `the tool grants "${input.action}" to this account` };
 }
 
 export function rolesForEmployee(state, employeeId) {
@@ -94,12 +126,20 @@ export function evaluateUserAccess(state, input) {
   if (!supportedBySource(connection.sourceTool, input.resourceType, input.action)) {
     result.sourceBoundary = "Denied";
     result.explanation.push("The connected source tool does not support this action.");
-    step("Source Ceiling", "fail", "The connected source tool does not support this action.");
+    step("Source Ceiling", "fail", `${connection.sourceTool} has no such action on ${input.resourceType}.`);
+    return result;
+  }
+
+  const ceiling = ceilingCheck(state, employee.id, input);
+  if (!ceiling.ok) {
+    result.sourceBoundary = "Denied";
+    result.explanation.push(`The source-system ceiling blocked this request: ${ceiling.reason}.`);
+    step("Source Ceiling", "fail", `${connection.sourceTool} does not grant this to ${employee.name} — ${ceiling.reason}. Access can be narrowed below the tool's own permissions, never widened above them.`);
     return result;
   }
   result.sourceBoundary = "Allowed";
-  result.explanation.push("The source-system permission boundary permits this category, tool and resource type.");
-  step("Source Ceiling", "pass", `${connection.sourceTool} permits ${input.action} on ${input.resourceType}.`);
+  result.explanation.push("The source-system permission boundary permits this action for this identity.");
+  step("Source Ceiling", "pass", `${connection.sourceTool} grants ${employee.name} "${input.action}" on ${input.resourceType} (observed ${formatObservedAt(state)}).`);
 
   const activeRoles = rolesForEmployee(state, employee.id).filter((role) => role.status === "Active");
   const matchingGrants = activeRoles.flatMap((role) =>
@@ -229,6 +269,18 @@ export function evaluateAgentAccess(state, input) {
     result.explanation.push("The source tool does not support the selected business action.");
     step("Source Ceiling", "fail", "The source tool does not support the selected business action.");
     return result;
+  }
+  // For a delegated agent the ceiling that applies is its principal's, checked again
+  // during Principal Intersection below. An autonomous agent is bounded by its own
+  // allow-list plus whatever the tool supports.
+  if (agent.type === "Delegated Agent" && input.actingUserId) {
+    const principalCeiling = ceilingCheck(state, input.actingUserId, input);
+    if (!principalCeiling.ok) {
+      result.sourcePermissionResult = "Denied";
+      result.explanation.push(`The requesting user's source-system ceiling blocked this: ${principalCeiling.reason}.`);
+      step("Source Ceiling", "fail", `${connection.sourceTool} does not grant this to the requesting user — ${principalCeiling.reason}. A delegated agent inherits its principal's ceiling.`);
+      return result;
+    }
   }
   const broadAction = input.action?.split(" ")[0];
   const actionAllowed = agent.allowedActions.includes(input.action) || agent.allowedActions.includes(broadAction) || agent.allowedActions.some((allowed) => normalize(input.action).includes(normalize(allowed)));

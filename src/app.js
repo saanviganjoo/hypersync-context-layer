@@ -26,7 +26,7 @@ import {
   togglePermissionsLayer,
   toggleRoleStatus
 } from "./state.js";
-import { evaluateAgentAccess, evaluateUserAccess, explainEmployeeAccess, rolesForEmployee, simulateLifecycleEvent } from "./evaluator.js";
+import { evaluateAgentAccess, evaluateUserAccess, explainEmployeeAccess, observedAccessFor, observedRowsFor, rolesForEmployee, simulateLifecycleEvent } from "./evaluator.js";
 import { answerQuestion, fetchModes, suggestedPrompts } from "./context.js";
 
 const app = document.querySelector("#app");
@@ -1423,35 +1423,162 @@ function renderEmployeeRoles(data, employee) {
   `;
 }
 
+/** What this employee's active roles intend for one connection + resource type. */
+function roleIntentFor(data, employee, connectionId, resourceType) {
+  const roles = rolesForEmployee(data, employee.id).filter((role) => role.status === "Active");
+  const allow = new Set();
+  const deny = new Set();
+  const viaRoles = new Set();
+  const resourceIds = new Set();
+  let scopeAll = false;
+  roles.forEach((role) => {
+    role.permissions
+      .filter((permission) => permission.connectionId === connectionId)
+      .forEach((permission) => {
+        Object.entries(permission.matrix?.[resourceType] || {}).forEach(([name, effect]) => {
+          if (effect === "allow") {
+            allow.add(name);
+            viaRoles.add(role.name);
+          }
+          if (effect === "deny") deny.add(name);
+        });
+        if (permission.resourceScope?.mode === "all") scopeAll = true;
+        (permission.resourceScope?.resourceIds || []).forEach((id) => resourceIds.add(id));
+      });
+  });
+  return { allow: [...allow], deny: [...deny], roles: [...viaRoles], resourceIds: [...resourceIds], scopeAll };
+}
+
+const OUTCOMES = {
+  effective: { label: "Allowed", tone: "allow", why: "Granted by role and confirmed in the tool." },
+  ceiling: { label: "Blocked", tone: "deny", why: "Limited by ceiling — the role grants this, but the tool does not give this account the right. We cannot widen it." },
+  role: { label: "Not granted", tone: "unset", why: "Limited by role — the tool would allow this, but no role grants it. This is the layer narrowing access." },
+  denied: { label: "Denied", tone: "deny", why: "Explicit deny in a role. A deny always beats a grant." }
+};
+
+function classifyAction(observed, granted, denied) {
+  if (denied) return "denied";
+  if (granted && observed) return "effective";
+  if (granted && !observed) return "ceiling";
+  return "role";
+}
+
 function renderEmployeeEffective(data, employee) {
   const roles = rolesForEmployee(data, employee.id).filter((role) => role.status === "Active");
-  const grouped = {};
-  roles.forEach((role) => {
-    role.permissions.forEach((permission) => {
-      const key = `${permission.category}|${permission.tool}|${permission.connectionId}`;
-      grouped[key] ||= { permission, roles: [] };
-      grouped[key].roles.push(role.name);
-    });
-  });
-  return `
-    <div class="card">
-      <h2>Effective Access</h2>
-      ${Object.values(grouped).map(({ permission, roles }) => {
-        const connection = byId(data.connections, permission.connectionId);
+  const observedRows = observedRowsFor(data, employee.id);
+  const grantConnectionIds = roles.flatMap((role) => role.permissions.map((permission) => permission.connectionId));
+  const connectionIds = [...new Set([...observedRows.map((row) => row.connectionId), ...grantConnectionIds])];
+
+  const tally = { effective: 0, ceiling: 0, role: 0, denied: 0 };
+  const blocks = connectionIds.map((connectionId) => {
+    const connection = byId(data.connections, connectionId);
+    if (!connection) return "";
+    const resourceTypes = [...new Set([
+      ...observedRows.filter((row) => row.connectionId === connectionId).map((row) => row.resourceType),
+      ...roles.flatMap((role) => role.permissions.filter((permission) => permission.connectionId === connectionId).flatMap((permission) => Object.keys(permission.matrix || {})))
+    ])];
+
+    const groups = resourceTypes.map((resourceType) => {
+      const observedRow = observedAccessFor(data, employee.id, connectionId, resourceType);
+      const intent = roleIntentFor(data, employee, connectionId, resourceType);
+      const observedActions = observedRow?.actions || [];
+      const catalogueOrder = getActionsForResource(connection.sourceTool, resourceType).map((item) => item.name);
+      const union = [...new Set([...catalogueOrder, ...observedActions, ...intent.allow, ...intent.deny])]
+        .filter((name) => observedActions.includes(name) || intent.allow.includes(name) || intent.deny.includes(name));
+      if (!union.length) return "";
+
+      const rows = union.map((name) => {
+        const outcome = classifyAction(observedActions.includes(name), intent.allow.includes(name), intent.deny.includes(name));
+        tally[outcome] += 1;
+        const meta = OUTCOMES[outcome];
         return `
-          <div class="effective-block">
-            <h3>${esc(permission.category)} → ${esc(permission.tool)} → ${esc(connection?.connectionName || permission.connectionId)}</h3>
-            <p>Roles: ${esc(roles.join(", "))}</p>
-            ${Object.entries(permission.matrix).map(([resourceType, actions]) => {
-              const allowed = Object.entries(actions).filter(([, effect]) => effect === "allow").map(([name]) => name);
-              const denied = Object.entries(actions).filter(([, effect]) => effect === "deny").map(([name]) => name);
-              return `<div class="effective-row"><strong>${esc(resourceType)}</strong><span>${badge(`Allow: ${allowed.length}`, "allow")} ${badge(`Explicit deny: ${denied.length}`, "deny")}</span><small>${esc([...allowed.slice(0, 6), ...denied.slice(0, 3)].join(", ") || "No configured actions")}</small></div>`;
-            }).join("")}
-          </div>
+          <tr class="intersect-row ${outcome}">
+            <td>${esc(name)}</td>
+            <td class="mark">${observedActions.includes(name) ? `<span class="yes">✓</span>` : `<span class="no">—</span>`}</td>
+            <td class="mark">${intent.deny.includes(name) ? `<span class="denied">deny</span>` : intent.allow.includes(name) ? `<span class="yes">✓</span>` : `<span class="no">—</span>`}</td>
+            <td>${badge(meta.label, meta.tone)}</td>
+            <td class="why">${esc(meta.why)}</td>
+          </tr>
         `;
-      }).join("") || `<div class="empty-state">No active effective access.</div>`}
+      }).join("");
+
+      const extraResources = (observedRow?.resourceIds || []).filter((id) => !intent.scopeAll && !intent.resourceIds.includes(id));
+      return `
+        <div class="intersect-group">
+          <h4>${esc(resourceType)}${extraResources.length ? ` <span class="scope-note">tool exposes ${(observedRow?.resourceIds || []).length} resources · role scopes to ${intent.scopeAll ? "all" : intent.resourceIds.length}</span>` : ""}</h4>
+          <div class="table-wrap tight">
+            <table class="intersect-table">
+              <thead>
+                <tr>
+                  <th>Action</th>
+                  <th>In tool</th>
+                  <th>Role</th>
+                  <th>Effective</th>
+                  <th>Why</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    if (!groups) return "";
+    const via = [...new Set(roles.filter((role) => role.permissions.some((permission) => permission.connectionId === connectionId)).map((role) => role.name))];
+    return `
+      <div class="card">
+        <div class="section-head">
+          <div>
+            <h3>${esc(connection.category)} → ${esc(connection.sourceTool)} → ${esc(connection.connectionName)}</h3>
+            <p>${via.length ? `Via role: ${esc(via.join(", "))}` : "No role grants anything here — everything below is native access this layer withholds."}</p>
+          </div>
+        </div>
+        ${groups}
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="card intersect-summary">
+      <div class="section-head">
+        <div>
+          <h2>Effective Access ${tip("Effective access is the intersection of what the tool itself grants this account and what their roles allow, minus explicit denies. Whichever side is narrower wins — the layer can only reduce access, never extend it.")}</h2>
+          <p>Ceiling last observed from the source tools ${esc(ceilingAge(data))}.</p>
+        </div>
+        <div class="formula inline-formula">
+          <strong>Effective =</strong>
+          <span>Observed ceiling</span>
+          <span>∩ Role grants</span>
+          <span>− Explicit deny</span>
+        </div>
+      </div>
+      <div class="intersect-tally">
+        ${intersectTally("Effective", tally.effective, "allow", "Granted by a role and confirmed present in the tool.")}
+        ${intersectTally("Limited by role", tally.role, "unset", "The tool grants this but no role does, so the layer withholds it. This is the product doing its job — and each one is native access worth reviewing.")}
+        ${intersectTally("Limited by ceiling", tally.ceiling, "warning", "A role grants this but the tool does not. The grant has no effect until it is provisioned in the source tool.")}
+        ${intersectTally("Explicit deny", tally.denied, "deny", "Blocked by a deny rule regardless of any grant.")}
+      </div>
+    </div>
+    ${blocks || `<div class="empty-state">No role grants and no observed native access for this identity.</div>`}
+  `;
+}
+
+function intersectTally(label, value, tone, hint) {
+  return `
+    <div class="tally-item ${tone}">
+      <strong>${esc(value)}</strong>
+      <span>${esc(label)} ${tip(hint)}</span>
     </div>
   `;
+}
+
+function ceilingAge(data) {
+  if (!data.ceilingSyncedAt) return "at an unknown time";
+  const hours = (Date.now() - new Date(data.ceilingSyncedAt).getTime()) / 3600000;
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} minutes ago`;
+  if (hours < 48) return `${Math.round(hours)} hours ago`;
+  return `${Math.round(hours / 24)} days ago`;
 }
 
 function renderEmployeeExplanation(data, employee) {

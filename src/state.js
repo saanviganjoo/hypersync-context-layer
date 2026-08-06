@@ -309,6 +309,110 @@ function agents() {
   ];
 }
 
+/**
+ * Observed native access — "the ceiling".
+ *
+ * What each tool itself grants a person's account today, independent of any
+ * HyperContext role. In production a connector produces this by reading native
+ * ACLs (readNativeAccess); here a baseline is derived from role grants so the
+ * seeded demo keeps working, then patched with the deltas below so every
+ * intersection outcome is represented:
+ *
+ *   remove → role grants it, the tool does not  → limited by ceiling
+ *   add    → the tool grants it, no role does   → limited by role (and excess native access)
+ */
+const observedAccessDeltas = {
+  emp_rahul: {
+    remove: { conn_zoho: { Invoices: ["Export invoices"], Accounts: ["Export accounts"] } },
+    add: {
+      conn_zoho: { Invoices: { actions: ["Void invoices"] } },
+      conn_drive: { Files: { actions: ["Delete file"] }, Folders: { actions: ["Manage folder permissions"] } }
+    }
+  },
+  emp_aditi: {
+    add: { conn_zoho: { Payments: { actions: ["Refund payments"] } } }
+  },
+  emp_sana: {
+    add: {
+      conn_jira: {
+        // Sana's Jira account can see the finance project natively; the role narrows her to support.
+        Tickets: { resourceIds: ["jira_fin", "tickets_finance"], actions: ["Transition ticket"] },
+        Comments: { actions: ["View internal comments"] }
+      }
+    }
+  },
+  emp_vikram: {
+    add: { conn_jira: { Tickets: { actions: ["Transition ticket"] } } }
+  },
+  emp_ishaan: {
+    // Branch protection in GitHub means the merge right the role grants does not actually exist.
+    remove: { conn_github: { "Pull Requests": ["Merge pull request"] } },
+    add: { conn_github: { Repositories: { actions: ["Delete repository"] } } }
+  },
+  emp_neha: {
+    add: { conn_github: { Organizations: { actions: ["Manage organization"] } } }
+  },
+  emp_priya: {
+    remove: { conn_darwinbox: { Employees: ["Export employee data"] } },
+    // Darwinbox itself would show Priya bank details; the HR Administrator role withholds them.
+    add: { conn_darwinbox: { Employees: { actions: ["View bank details"] } } }
+  },
+  emp_jia: {
+    add: {
+      conn_drive: { Files: { actions: ["Read file content", "Download file"] } },
+      conn_confluence: { Pages: { actions: ["Export page"] } }
+    }
+  },
+  emp_kabir: { add: { conn_drive: { Files: { actions: ["Download file"] } } } },
+  emp_tanya: { add: { conn_drive: { Files: { actions: ["Download file"] } } } },
+  emp_omar: { add: { conn_drive: { Files: { actions: ["Download file"] } } } }
+};
+
+function deriveObservedAccess(roleList, employeeList) {
+  const map = {};
+  employeeList.forEach((employee) => {
+    const rows = new Map();
+    const upsert = (connectionId, resourceType, resourceIds, actions) => {
+      const key = `${connectionId}|${resourceType}`;
+      const row = rows.get(key) || { connectionId, resourceType, resourceIds: [], actions: [] };
+      resourceIds.forEach((resourceId) => {
+        if (resourceId && !row.resourceIds.includes(resourceId)) row.resourceIds.push(resourceId);
+      });
+      actions.forEach((action) => {
+        if (!row.actions.includes(action)) row.actions.push(action);
+      });
+      rows.set(key, row);
+    };
+
+    roleList
+      .filter((role) => employee.roleIds.includes(role.id))
+      .forEach((role) => {
+        role.permissions.forEach((permission) => {
+          Object.entries(permission.matrix).forEach(([resourceType, actions]) => {
+            const allowed = Object.entries(actions).filter(([, effect]) => effect === "allow").map(([name]) => name);
+            if (allowed.length) upsert(permission.connectionId, resourceType, permission.resourceScope.resourceIds || [], allowed);
+          });
+        });
+      });
+
+    const delta = observedAccessDeltas[employee.id];
+    Object.entries(delta?.add || {}).forEach(([connectionId, byResourceType]) => {
+      Object.entries(byResourceType).forEach(([resourceType, spec]) => {
+        upsert(connectionId, resourceType, spec.resourceIds || [], spec.actions || []);
+      });
+    });
+    Object.entries(delta?.remove || {}).forEach(([connectionId, byResourceType]) => {
+      Object.entries(byResourceType).forEach(([resourceType, actions]) => {
+        const row = rows.get(`${connectionId}|${resourceType}`);
+        if (row) row.actions = row.actions.filter((action) => !actions.includes(action));
+      });
+    });
+
+    map[employee.id] = [...rows.values()].filter((row) => row.actions.length);
+  });
+  return map;
+}
+
 export function createDemoState() {
   const connections = [
     makeConnection({ id: "conn_darwinbox", category: "HRMS", tool: "Darwinbox", name: "Darwinbox" }),
@@ -419,6 +523,8 @@ export function createDemoState() {
     activeAssignmentRules: assignmentRules().filter((rule) => rule.roleId === role.id).length
   }));
 
+  const demoEmployees = employees();
+
   return {
     version: 1,
     generatedAt: now(),
@@ -427,7 +533,9 @@ export function createDemoState() {
     connections,
     resources: resources(),
     roles: demoRoles,
-    employees: employees(),
+    employees: demoEmployees,
+    observedAccess: deriveObservedAccess(demoRoles, demoEmployees),
+    ceilingSyncedAt: daysAgo(0.08),
     iamProviders: [{ id: "iam_okta", provider: "Okta", status: "Connected", lastSync: daysAgo(1), groupsLoaded: true }],
     iamGroups: [
       { id: "grp_finance_mgmt", providerId: "iam_okta", name: "finance-management", members: 9, mappedRoleId: "role_finance_manager" },
@@ -461,6 +569,8 @@ function normalizeState(input) {
     resources: { ...demo.resources, ...(input.resources || {}) },
     roles: Array.isArray(input.roles) ? input.roles : demo.roles,
     employees: Array.isArray(input.employees) ? input.employees : demo.employees,
+    observedAccess: input.observedAccess && typeof input.observedAccess === "object" ? input.observedAccess : demo.observedAccess,
+    ceilingSyncedAt: input.ceilingSyncedAt || demo.ceilingSyncedAt,
     iamProviders: Array.isArray(input.iamProviders) ? input.iamProviders : demo.iamProviders,
     iamGroups: Array.isArray(input.iamGroups) ? input.iamGroups : demo.iamGroups,
     assignmentRules: Array.isArray(input.assignmentRules) ? input.assignmentRules : demo.assignmentRules,

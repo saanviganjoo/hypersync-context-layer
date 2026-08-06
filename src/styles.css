@@ -1742,6 +1742,141 @@ code {
   color: var(--amber);
 }
 
+/* ---------- Effective access intersection ---------- */
+
+.formula.inline-formula {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 12px;
+}
+
+.formula.inline-formula span {
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.intersect-tally {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.tally-item {
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  padding: 11px 13px;
+}
+
+.tally-item strong {
+  display: block;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.tally-item span {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tally-item.allow {
+  border-left-color: var(--green);
+}
+
+.tally-item.unset {
+  border-left-color: var(--blue);
+}
+
+.tally-item.warning {
+  border-left-color: var(--amber);
+}
+
+.tally-item.deny {
+  border-left-color: var(--red);
+}
+
+.intersect-group {
+  margin-top: 14px;
+}
+
+.intersect-group h4 {
+  margin-bottom: 8px;
+}
+
+.scope-note {
+  font-weight: 500;
+  font-size: 11.5px;
+  color: var(--amber);
+  margin-left: 6px;
+}
+
+.intersect-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.intersect-table th,
+.intersect-table td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+
+.intersect-table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.intersect-table th:nth-child(2),
+.intersect-table th:nth-child(3),
+.intersect-table td.mark {
+  text-align: center;
+  width: 76px;
+}
+
+.intersect-table td.why {
+  color: var(--muted);
+  font-size: 11.5px;
+  max-width: 34ch;
+}
+
+.intersect-table .yes {
+  color: var(--green);
+  font-weight: 800;
+}
+
+.intersect-table .no {
+  color: #b0b7c3;
+}
+
+.intersect-table .denied {
+  color: var(--red);
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.intersect-row.ceiling {
+  background: var(--amber-soft);
+}
+
+.intersect-row.denied {
+  background: var(--red-soft);
+}
+
 /* ---------- Recent activity ---------- */
 
 .activity-list {
@@ -2280,6 +2415,10 @@ code {
   }
 
   .enabler-checklist {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .intersect-tally {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
