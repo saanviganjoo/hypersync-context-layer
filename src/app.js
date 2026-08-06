@@ -12,7 +12,6 @@ import {
   sourceEnforcementStatuses
 } from "./catalogue.js";
 import {
-  STORAGE_KEY,
   addAuditEvent,
   addEmployeesToRole,
   connectIamProvider,
@@ -24,9 +23,11 @@ import {
   store,
   syncIamProvider,
   toggleAgentStatus,
+  togglePermissionsLayer,
   toggleRoleStatus
 } from "./state.js";
 import { evaluateAgentAccess, evaluateUserAccess, explainEmployeeAccess, rolesForEmployee, simulateLifecycleEvent } from "./evaluator.js";
+import { answerQuestion, fetchModes, suggestedPrompts } from "./context.js";
 
 const app = document.querySelector("#app");
 const toastRoot = document.querySelector("#toast-root");
@@ -34,8 +35,7 @@ const toastRoot = document.querySelector("#toast-root");
 const stateful = {
   filters: {
     roles: { q: "", source: "", status: "", category: "", tool: "" },
-    employees: { q: "", department: "", designation: "", role: "", status: "", source: "" },
-    audit: { eventType: "", principalType: "", category: "", tool: "", connection: "", performedBy: "", start: "", end: "" }
+    employees: { q: "", department: "", designation: "", role: "", status: "", source: "" }
   },
   modal: null,
   confirm: null,
@@ -68,6 +68,14 @@ const stateful = {
     newValue: "Support",
     result: null
   },
+  context: {
+    employeeId: "emp_rahul",
+    draft: "",
+    managedDevice: true,
+    reason: "",
+    thread: [],
+    openExplain: null
+  },
   activeTabs: {
     permissions: "roles",
     roleDetails: "overview",
@@ -78,22 +86,14 @@ const stateful = {
 
 const navItems = [
   ["dashboard", "Dashboard", "layout-dashboard"],
-  ["corporates", "Corporates", "building"],
-  ["connections", "Connections", "plug"],
-  ["sync", "Sync Config", "refresh"],
-  ["audit-logs", "Audit Logs", "file-search"],
-  ["permissions", "Permissions", "shield"],
-  ["settings", "Settings", "settings"]
+  ["context", "Context Layer", "sparkle"],
+  ["permissions", "Permissions", "shield"]
 ];
 
 const pageTitles = {
-  dashboard: ["Dashboard", "Monitor corporate data syncs and operational health."],
-  corporates: ["Corporates", "Manage corporate workspaces and identifiers."],
-  connections: ["Connections", "Create and monitor connected enterprise tools."],
-  sync: ["Sync Configuration", "Control sync schedules, modules and data scopes."],
-  "audit-logs": ["Audit Logs", "Review system, connection and permission events."],
-  permissions: ["Permissions & Access", "Control which employees and AI agents can access connected tools, resources, data and actions."],
-  settings: ["Settings", "Configure prototype preferences and reset demo state."]
+  dashboard: ["Dashboard", "Enable the permissions layer, manage connected tools and review recent access activity."],
+  context: ["Context Layer", "Ask a question across every connected tool. Answers are built only from records the asker is already allowed to read."],
+  permissions: ["Permissions & Access", "Control which employees and AI agents can access connected tools, resources, data and actions."]
 };
 
 function esc(value) {
@@ -131,12 +131,8 @@ function icon(name) {
   const common = "viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'";
   const paths = {
     "layout-dashboard": "<rect x='3' y='3' width='7' height='8' rx='1.5'/><rect x='14' y='3' width='7' height='5' rx='1.5'/><rect x='14' y='12' width='7' height='9' rx='1.5'/><rect x='3' y='15' width='7' height='6' rx='1.5'/>",
-    building: "<path d='M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16'/><path d='M16 8h2a2 2 0 0 1 2 2v11'/><path d='M8 7h4M8 11h4M8 15h4M7 21h10'/>",
-    plug: "<path d='M12 22v-5'/><path d='M9 8V2M15 8V2'/><path d='M7 8h10v4a5 5 0 0 1-10 0z'/>",
     refresh: "<path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/>",
-    "file-search": "<path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/><path d='M14 2v6h6'/><circle cx='11' cy='14' r='2.8'/><path d='m13 16 2 2'/>",
     shield: "<path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/><path d='M9 12l2 2 4-5'/>",
-    settings: "<path d='M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z'/><path d='M19.4 15a1.8 1.8 0 0 0 .36 2l.04.04a2 2 0 1 1-2.83 2.83l-.04-.04a1.8 1.8 0 0 0-2-.36 1.8 1.8 0 0 0-1 1.64V21a2 2 0 1 1-4 0v-.06a1.8 1.8 0 0 0-1-1.64 1.8 1.8 0 0 0-2 .36l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04a1.8 1.8 0 0 0 .36-2 1.8 1.8 0 0 0-1.64-1H3a2 2 0 1 1 0-4h.06a1.8 1.8 0 0 0 1.64-1 1.8 1.8 0 0 0-.36-2l-.04-.04A2 2 0 1 1 7.13 3.1l.04.04a1.8 1.8 0 0 0 2 .36H9.2A1.8 1.8 0 0 0 10 1.86V1a2 2 0 1 1 4 0v.06a1.8 1.8 0 0 0 1 1.64 1.8 1.8 0 0 0 2-.36l.04-.04a2 2 0 1 1 2.83 2.83l-.04.04a1.8 1.8 0 0 0-.36 2 1.8 1.8 0 0 0 1.64 1H21a2 2 0 1 1 0 4h-.06a1.8 1.8 0 0 0-1.54 1z'/>",
     plus: "<path d='M12 5v14M5 12h14'/>",
     upload: "<path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'/><path d='M17 8l-5-5-5 5'/><path d='M12 3v12'/>",
     key: "<circle cx='7.5' cy='14.5' r='4.5'/><path d='M11 11l9-9M16 6l2 2M14 8l2 2'/>",
@@ -148,9 +144,19 @@ function icon(name) {
     eye: "<path d='M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z'/><circle cx='12' cy='12' r='3'/>",
     bolt: "<path d='M13 2 3 14h8l-1 8 11-13h-8z'/>",
     x: "<path d='M18 6 6 18M6 6l12 12'/>",
-    check: "<path d='M20 6 9 17l-5-5'/>"
+    check: "<path d='M20 6 9 17l-5-5'/>",
+    sparkle: "<path d='M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z'/><path d='M18.5 16.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z'/>",
+    info: "<circle cx='12' cy='12' r='9'/><path d='M12 16v-4M12 8h.01'/>",
+    send: "<path d='M22 2 11 13'/><path d='M22 2 15 22l-4-9-9-4z'/>",
+    lock: "<rect x='4' y='11' width='16' height='9' rx='2'/><path d='M8 11V7a4 4 0 0 1 8 0v4'/>",
+    user: "<circle cx='12' cy='8' r='4'/><path d='M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1'/>"
   };
   return `<svg class="icon" ${common}>${paths[name] || paths.shield}</svg>`;
+}
+
+// align "end" keeps the bubble inside the viewport for tips sitting near the right edge.
+function tip(text, align = "center") {
+  return `<span class="tip ${align === "end" ? "tip-end" : ""}" tabindex="0" role="note" aria-label="${esc(text)}">${icon("info")}<span class="tip-bubble">${esc(text)}</span></span>`;
 }
 
 function badge(value, tone = "") {
@@ -183,7 +189,8 @@ function closeModal() {
 
 function currentPageKey(parts) {
   if (parts[0] === "permissions") return "permissions";
-  return parts[0] || "dashboard";
+  // Retired routes (connections, audit-logs, settings) fall through to the dashboard.
+  return pageTitles[parts[0]] ? parts[0] : "dashboard";
 }
 
 function render() {
@@ -235,11 +242,7 @@ function renderPage(data, current) {
   if (section === "permissions" && subSection === "roles" && idValue) return renderRoleDetails(data, idValue, current.params.get("tab") || stateful.activeTabs.roleDetails);
   if (section === "permissions" && subSection === "employees" && idValue) return renderEmployeeDetails(data, idValue, current.params.get("tab") || stateful.activeTabs.employeeDetails);
   if (section === "permissions" && subSection === "agents" && idValue) return renderAgentDetails(data, idValue, current.params.get("tab") || stateful.activeTabs.agentDetails);
-  if (section === "connections") return renderConnections(data);
-  if (section === "audit-logs") return renderAuditLogs(data, false);
-  if (section === "settings") return renderSettings();
-  if (section === "corporates") return renderSimplePage(data, "Corporate Workspace", "TartanHQ India", "This prototype is scoped to one corporate workspace and uses corporate isolation in every permission decision.");
-  if (section === "sync") return renderSimplePage(data, "Sync Configuration", "Daily active syncs", "Connection sync settings remain available from the connection creation flow and persisted connection records.");
+  if (section === "context") return renderContextLayer(data);
   if (section === "permissions") return renderPermissions(data, current.params.get("tab") || stateful.activeTabs.permissions);
   return renderDashboard(data);
 }
@@ -248,46 +251,105 @@ function renderDashboard(data) {
   const activeConnections = data.connections.filter((connection) => connection.status === "Active").length;
   const activeRoles = data.roles.filter((role) => role.status === "Active").length;
   return `
+    ${renderLayerEnabler(data)}
     <div class="summary-grid">
       ${summaryCard("Active Connections", activeConnections, "Across HRMS, Ticketing, Storage, Accounting, Knowledge Base and Developer Tools")}
       ${summaryCard("Employees Covered", data.employees.filter((employee) => employee.accessStatus === "Active").length, "Active identities evaluated by HyperContext")}
       ${summaryCard("Permission Roles", activeRoles, "Roles with scoped resource policies")}
-      ${summaryCard("Audit Events", data.auditEvents.length, "Recent system and permission events")}
+      ${summaryCard("Recorded Events", data.auditEvents.length, "Every decision, grant and change is attributable")}
     </div>
     <div class="card">
       <div class="section-head">
         <div>
-          <h2>Connection Health</h2>
-          <p>Existing portal routes remain available in this local prototype.</p>
+          <h2>Connected Tools ${tip("A corporate can hold many connections across categories. Every new connection starts at No Access until a role grants something on it.")}</h2>
+          <p>Each connection feeds the Decision Service its permission ceiling and its resources.</p>
         </div>
         ${actionButton(`${icon("plus")} Add New Connection`, "open-connection-wizard", "primary")}
       </div>
-      ${connectionTable(data.connections.slice(0, 6))}
+      ${connectionTable(data.connections)}
     </div>
+    ${renderRecentActivity(data)}
   `;
 }
 
-function renderSimplePage(data, title, metric, text) {
+function renderRecentActivity(data) {
+  const events = data.auditEvents.slice(0, 8);
   return `
     <div class="card">
       <div class="section-head">
         <div>
-          <h2>${esc(title)}</h2>
-          <p>${esc(text)}</p>
+          <h2>Recent Activity ${tip("An immutable record of every permission change, lifecycle event, context query and agent action. Per-role, per-employee and per-agent history lives on each of their detail pages.")}</h2>
+          <p>The newest ${events.length} of ${data.auditEvents.length} recorded events.</p>
         </div>
-        ${metric ? badge(metric, "active") : ""}
       </div>
-      <div class="empty-state">This page is intentionally preserved as a lightweight HyperSync portal surface for the prototype.</div>
+      ${events.length ? `
+        <div class="activity-list">
+          ${events.map((event) => `
+            <div class="activity-row">
+              <span class="activity-dot ${activityTone(event.eventType)}"></span>
+              <div class="activity-body">
+                <strong>${esc(event.eventType)}</strong>
+                <small>${esc(event.summary || event.after)}</small>
+              </div>
+              <div class="activity-meta">
+                <span>${esc(event.principal || event.principalType)}</span>
+                <small>${formatDate(event.timestamp)}</small>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      ` : `<div class="empty-state small">No activity recorded yet.</div>`}
     </div>
   `;
 }
 
-function renderSettings() {
+function activityTone(eventType) {
+  if (/Denied|Disabled|Revoked|Failed/i.test(eventType)) return "deny";
+  if (/Pending|Started|Evaluated|Recalculated/i.test(eventType)) return "warn";
+  return "allow";
+}
+
+function renderLayerEnabler(data) {
+  const enabled = data.app.permissionsLayerEnabled !== false;
+  const configuredRoles = data.roles.filter((role) => role.status === "Active" && role.permissions.length);
+  const coveredEmployees = data.employees.filter((employee) => employee.roleIds.length);
+  const governedAgents = data.agents.filter((agent) => agent.status === "Active");
+  const checklist = [
+    ["Tools connected", data.connections.length, `${data.connections.length} connections across ${new Set(data.connections.map((item) => item.category)).size} categories`, data.connections.length > 0],
+    ["Roles scoped", configuredRoles.length, "Roles carrying at least one resource grant", configuredRoles.length > 0],
+    ["People mapped", coveredEmployees.length, `${coveredEmployees.length} of ${data.employees.length} identities resolved to a role`, coveredEmployees.length > 0],
+    ["Agents governed", governedAgents.length, "Agents with their own identity, allow-list and human owner", governedAgents.length > 0]
+  ];
+  const ready = checklist.every(([, , , ok]) => ok);
   return `
-    <div class="card narrow">
-      <h2>Prototype Settings</h2>
-      <p class="muted">Demo state is persisted in <code>${STORAGE_KEY}</code>. Reset only affects this browser.</p>
-      ${actionButton("Reset Demo Data", "reset-demo", "secondary")}
+    <div class="enabler-card ${enabled ? "on" : "off"}">
+      <div class="enabler-main">
+        <div class="enabler-status">
+          <span class="enabler-pill ${enabled ? "on" : "off"}">${enabled ? icon("shield") : icon("lock")} ${enabled ? "Enforcing" : "Off"}</span>
+          <div>
+            <h2>Permissions Layer ${tip("One Decision Service answers a single question — “is this identity allowed to do this, on this resource, right now?” — for the Context Layer, provisioning and every AI agent. Turning it off makes all three default-deny.")}</h2>
+            <p>${enabled
+              ? "Every request from the Context Layer, provisioning and agents is evaluated against source ceiling, role grants, explicit denies and runtime conditions."
+              : "The Decision Service is default-closed. Roles and grants are preserved, but nothing will be released until you switch it back on."}</p>
+          </div>
+        </div>
+        <div class="enabler-actions">
+          <button class="btn ${enabled ? "secondary" : "primary"}" data-action="confirm-toggle-permissions-layer">${enabled ? "Turn off" : "Enable permissions layer"}</button>
+          <button class="btn primary" data-route="/context">${icon("sparkle")} Open Context Layer</button>
+        </div>
+      </div>
+      <div class="enabler-checklist">
+        ${checklist.map(([label, count, helper, ok]) => `
+          <div class="checklist-item ${ok ? "done" : "todo"}">
+            <span class="checklist-mark">${ok ? icon("check") : icon("plus")}</span>
+            <div>
+              <strong>${esc(label)} <em>${esc(count)}</em></strong>
+              <small>${esc(helper)}</small>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+      ${ready ? "" : `<div class="enabler-hint">${icon("info")} Finish the unchecked steps above to give the Decision Service full coverage.</div>`}
     </div>
   `;
 }
@@ -302,17 +364,179 @@ function summaryCard(label, value, helper) {
   `;
 }
 
-function renderConnections(data) {
+function renderContextLayer(data) {
+  const context = stateful.context;
+  const employee = byId(data.employees, context.employeeId) || data.employees[0];
+  const roles = rolesForEmployee(data, employee.id).filter((role) => role.status === "Active");
+  const reachable = [...new Set(roles.flatMap((role) => role.permissions.map((permission) => permission.connectionId)))];
+  const layerEnabled = data.app.permissionsLayerEnabled !== false;
   return `
-    <div class="card">
-      <div class="section-head">
-        <div>
-          <h2>Connections</h2>
-          <p>A corporate can have multiple connections across categories. New connections start with No Access.</p>
-        </div>
-        ${actionButton(`${icon("plus")} Add New Connection`, "open-connection-wizard", "primary")}
+    ${layerEnabled ? "" : `
+      <div class="deny-note">
+        ${icon("lock")} <strong>Permissions layer is off.</strong> The Decision Service is default-closed, so every question returns no data. Turn it back on from the Dashboard.
       </div>
-      ${connectionTable(data.connections)}
+    `}
+    <div class="context-layout">
+      <div class="card context-chat">
+        <div class="context-identity">
+          <div class="context-identity-main">
+            ${icon("user")}
+            <label class="select-label inline">
+              <span>Asking as ${tip("The Context Layer never answers as an admin. Pick the person asking, and the answer is rebuilt from only what they can already read.")}</span>
+              <select data-bind="context.employeeId">
+                ${data.employees.filter((item) => item.employmentStatus === "Active").map((item) => `<option value="${item.id}" ${item.id === employee.id ? "selected" : ""}>${esc(item.name)} — ${esc(item.designation)}</option>`).join("")}
+              </select>
+            </label>
+          </div>
+          <div class="context-identity-meta">
+            <span>${esc(roles.map((role) => role.name).join(", ") || "No active role")}</span>
+            <span>${reachable.length} of ${data.connections.length} tools reachable</span>
+          </div>
+        </div>
+        <div class="chat-thread" id="chat-thread">
+          ${context.thread.length ? context.thread.map((entry, index) => renderChatEntry(entry, index)).join("") : renderChatEmptyState(employee)}
+        </div>
+        <div class="composer">
+          <div class="prompt-chips">
+            ${suggestedPrompts(data, employee.id).map((prompt) => `<button class="prompt-chip" data-action="context-example" data-prompt="${esc(prompt)}">${esc(prompt)}</button>`).join("")}
+          </div>
+          <div class="composer-row">
+            <textarea data-bind="context.draft" rows="2" placeholder="Ask anything across ${esc(data.connections.length)} connected tools…">${esc(context.draft)}</textarea>
+            <button class="btn primary composer-send" data-action="context-ask">${icon("send")} Ask</button>
+          </div>
+          <div class="composer-context">
+            <label class="check-line"><input type="checkbox" data-bind="context.managedDevice" ${context.managedDevice ? "checked" : ""} /> Managed device ${tip("Some roles only release data on a company-managed device. Uncheck this to see the condition check fail.")}</label>
+            <label class="field inline-field"><span>Reason ${tip("Roles marked “reason required” — such as HR Administrator — will not return data until a business reason is recorded with the request.")}</span><input type="text" data-bind="context.reason" value="${esc(context.reason)}" placeholder="e.g. quarterly review" /></label>
+            ${context.thread.length ? `<button class="link-btn" data-action="context-clear">Clear conversation</button>` : ""}
+          </div>
+        </div>
+      </div>
+      ${renderContextSidebar(data, employee, roles, reachable)}
+    </div>
+  `;
+}
+
+function renderChatEmptyState(employee) {
+  return `
+    <div class="chat-welcome">
+      <div class="chat-welcome-mark">${icon("sparkle")}</div>
+      <h3>Ask across every connected tool</h3>
+      <p>Questions are answered as <strong>${esc(employee.name)}</strong>. Every record is checked against the same Decision Service the Access Simulator uses, so nothing outside their access can reach the answer.</p>
+    </div>
+  `;
+}
+
+function renderChatEntry(entry, index) {
+  const result = entry.result;
+  const open = stateful.context.openExplain === index;
+  return `
+    <div class="chat-turn">
+      <div class="chat-bubble user"><span>${esc(entry.question)}</span></div>
+      <div class="chat-bubble assistant">
+        <div class="assistant-head">
+          <span class="assistant-mark">${icon("sparkle")}</span>
+          <strong>Context Layer</strong>
+          <span class="assistant-scope">${esc(result.askedBy)} · ${result.sources.length} source${result.sources.length === 1 ? "" : "s"} used</span>
+        </div>
+        <p class="assistant-answer">${esc(result.answer)}</p>
+        ${result.excluded.length ? `
+          <div class="access-note">
+            ${icon("lock")}
+            <span><strong>Limited by your access.</strong> ${result.excluded.length} matching source${result.excluded.length === 1 ? "" : "s"} ${result.excluded.length === 1 ? "was" : "were"} excluded, and ${result.excluded.length === 1 ? "its" : "their"} contents were never read. ${tip("Per the permission model, a partial answer is always disclosed rather than silently truncated — a silently trimmed aggregate produces confidently wrong numbers.")}</span>
+          </div>
+        ` : ""}
+        ${result.sources.length ? `<div class="source-grid">${result.sources.map((source) => renderSourceCard(source)).join("")}</div>` : ""}
+        ${result.obligations.length ? renderObligations(result.obligations) : ""}
+        <button class="link-btn explain-toggle" data-action="context-explain" data-index="${index}">${open ? "Hide" : "Explain"} this answer</button>
+        ${open ? renderAnswerExplanation(result) : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderSourceCard(source) {
+  return `
+    <div class="source-card">
+      <div class="source-card-head">
+        <strong>${esc(source.title)}</strong>
+        <span class="badge allow">Allowed</span>
+      </div>
+      <span class="source-origin">${esc(source.tool)} · ${esc(source.connectionName)} · ${esc(source.action)}</span>
+      <dl class="source-fields">
+        ${source.fields.map((item) => `
+          <div class="${item.masked ? "masked" : ""}">
+            <dt>${esc(item.label)}</dt>
+            <dd>${esc(item.value)}${item.masked ? ` ${tip("This field is released in masked form by your role's field obligations. The raw value was never loaded into the answer.", "end")}` : ""}</dd>
+          </div>
+        `).join("")}
+      </dl>
+      ${source.hiddenFields.length ? `<span class="source-withheld">${icon("lock")} Withheld: ${esc(source.hiddenFields.join(", "))}</span>` : ""}
+      <span class="source-fetch">${esc(source.fetchMode)} ${tip(source.fetchNote)}</span>
+    </div>
+  `;
+}
+
+function renderAnswerExplanation(result) {
+  return `
+    <div class="answer-explanation">
+      <h4>How this answer was assembled</h4>
+      <p class="muted">Searched ${esc(result.toolsSearched.join(", ") || "no tools")}. Each candidate record ran the full four-step check before it was allowed into the answer.</p>
+      ${result.sources.map((source) => `
+        <details class="explain-source" open>
+          <summary><span class="badge allow">Allowed</span> ${esc(source.title)} <span class="muted">via ${esc(source.appliedRoles.join(", ") || "role policy")}</span></summary>
+          ${renderPipeline(source.decision.pipelineSteps)}
+        </details>
+      `).join("")}
+      ${result.excluded.map((item) => `
+        <details class="explain-source">
+          <summary><span class="badge deny">Excluded</span> ${esc(item.title)} <span class="muted">${esc(item.connectionName)}</span></summary>
+          <p class="deny-reason">${esc(item.reason)}</p>
+          ${item.decision ? renderPipeline(item.decision.pipelineSteps) : ""}
+        </details>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderContextSidebar(data, employee, roles, reachable) {
+  const grants = roles.flatMap((role) => role.permissions);
+  const restrictions = grants.flatMap((permission) => Object.entries(permission.fieldRestrictions || {}));
+  return `
+    <div class="context-side">
+      <div class="card">
+        <h2>What ${esc(employee.name.split(" ")[0])} can reach ${tip("This is the effective read surface the Context Layer is allowed to search. It is derived live from the same roles and grants configured under Permissions.", "end")}</h2>
+        <div class="reach-list">
+          ${data.connections.map((connection) => {
+            const inScope = reachable.includes(connection.id);
+            const fetch = fetchModes[connection.category];
+            return `
+              <div class="reach-row ${inScope ? "" : "out"}">
+                <span class="reach-dot ${inScope ? "in" : "out"}"></span>
+                <div>
+                  <strong>${esc(connection.sourceTool)}</strong>
+                  <small>${esc(connection.category)} · ${inScope ? esc(fetch?.mode || "Hybrid") : "No access"}</small>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+      <div class="card">
+        <h2>Field obligations ${tip("Obligations travel with the decision. Masked fields are released in redacted form; hidden fields are never loaded into the answer at all.", "end")}</h2>
+        ${restrictions.length ? `
+          <div class="obligation-list">
+            ${restrictions.map(([label, mode]) => `<div><span>${esc(label)}</span><span class="badge ${mode === "Hidden" ? "deny" : mode === "Masked" ? "warning" : "allow"}">${esc(mode)}</span></div>`).join("")}
+          </div>
+        ` : `<div class="empty-state small">No field obligations apply to this identity.</div>`}
+      </div>
+      <div class="card">
+        <h2>Test the same decision</h2>
+        <p class="muted">The Context Layer and the Access Simulator call one Decision Service, so a result here can always be reproduced there.</p>
+        <div class="page-actions compact">
+          ${actionButton("Open Access Simulator", "open-access-simulator", "secondary")}
+          <button class="btn secondary" data-route="/permissions/employees/${employee.id}" data-query-tab="effective">View effective access</button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -334,10 +558,10 @@ function connectionTable(connections) {
             <th>Category</th>
             <th>Source Tool</th>
             <th>Modules</th>
-            <th>Permission State</th>
-            <th>Default Access</th>
+            <th>Permission State ${tip("Unconfigured means no role grants anything on this connection yet. Partially Configured means some resource types are covered and the rest stay at No Access.")}</th>
+            <th>Default Access ${tip("Every new connection starts at No Access. Nothing is readable until a role explicitly grants it — the engine can only narrow the source tool's own permissions, never widen them.")}</th>
             <th>Status</th>
-            <th>Ceiling Health</th>
+            <th>Ceiling Health ${tip("How recently we re-read the source tool's own permissions. A stale ceiling means the snapshot we intersect against may no longer match the tool, so drift is possible.", "end")}</th>
           </tr>
         </thead>
         <tbody>
@@ -625,7 +849,7 @@ function renderLifecycleSimulator(data) {
     <div class="card">
       <div class="section-head">
         <div>
-          <h2>HRMS Event Simulator</h2>
+          <h2>HRMS Event Simulator ${tip("Nothing is written to a connected tool until you apply the plan. Every provisioning change is previewed as a diff first, so a bad rule is caught before it reaches production.")}</h2>
           <p>Run joiner, mover and leaver previews before mutating state.</p>
         </div>
       </div>
@@ -697,11 +921,11 @@ function renderAgentAccessTab(data) {
             <thead>
               <tr>
                 <th>Agent Name</th>
-                <th>Agent Type</th>
-                <th>Business Owner</th>
+                <th>Agent Type ${tip("A Delegated Agent can never exceed the person it is acting for — its access is intersected with theirs. An Autonomous Agent runs on its own service identity and never impersonates a human.")}</th>
+                <th>Business Owner ${tip("Every agent must have one accountable human. Actions above the risk threshold go to this person for approval, and every attempt is logged against the agent's own identity.")}</th>
                 <th>Allowed Tools</th>
-                <th>Risk Level</th>
-                <th>Approval Policy</th>
+                <th>Risk Level ${tip("The highest risk tier this agent is permitted to reach. Anything not on its allow-list is blocked by default, regardless of tier.")}</th>
+                <th>Approval Policy ${tip("Which actions pause for a human before they run. Keep this narrow — asking for approval on routine actions trains owners to click approve without reading.")}</th>
                 <th>Status</th>
                 <th>Last Used</th>
                 <th>Actions</th>
@@ -741,7 +965,7 @@ function renderAccessSimulator(data, embedded = false) {
     <div class="card ${embedded ? "" : "wide"}">
       <div class="section-head">
         <div>
-          <h2>Access Simulator</h2>
+          <h2>Access Simulator ${tip("This calls the same Decision Service the Context Layer and agent gateway use, so whatever it answers here is exactly what happens in production.")}</h2>
           <p>The deterministic evaluator decides access before data retrieval or action execution.</p>
         </div>
       </div>
@@ -766,16 +990,16 @@ function renderAccessSimulator(data, embedded = false) {
 function renderAccessResult(result, principalType) {
   const verdict = result.final === "Allow" ? "allow" : "deny";
   const metrics = principalType === "Agent" ? [
-    ["Source permission", result.sourcePermissionResult],
-    ["User permission", result.userPermissionResult],
-    ["Agent permission", result.agentPermissionResult],
-    ["Task scope", result.taskScopeResult],
-    ["Approval", result.approvalRequired ? "Required" : "Not required"]
+    ["Source permission", result.sourcePermissionResult, "What the tool itself allows. This is a hard ceiling — the engine can only narrow it."],
+    ["User permission", result.userPermissionResult, "For a delegated agent, the effective access of the person it is acting for. The agent can never exceed it."],
+    ["Agent permission", result.agentPermissionResult, "The agent's own allow-list. Anything not explicitly listed is blocked by default."],
+    ["Task scope", result.taskScopeResult, "Whether the requested resource falls inside the task the agent was given. Stops scope creep mid-run."],
+    ["Approval", result.approvalRequired ? "Required" : "Not required", "Whether a named human must sign off before this action executes."]
   ] : [
-    ["Source boundary", result.sourceBoundary],
-    ["HyperContext policy", result.hyperContextPolicy],
-    ["Applied roles", result.appliedRoles.join(", ") || "None"],
-    ["Approval", result.requiredApproval ? "Required" : "Not required"]
+    ["Source boundary", result.sourceBoundary, "What the connected tool itself permits. Access can be narrowed below this, never widened above it."],
+    ["HyperContext policy", result.hyperContextPolicy, "The outcome of role grants and explicit denies. A deny always beats any grant."],
+    ["Applied roles", result.appliedRoles.join(", ") || "None", "The active roles that produced the allow. Blank means no role granted this action."],
+    ["Approval", result.requiredApproval ? "Required" : "Not required", "Whether this action pauses for human sign-off before it executes."]
   ];
   return `
     <div class="result-panel ${verdict}">
@@ -783,7 +1007,7 @@ function renderAccessResult(result, principalType) {
         <span class="result-verdict ${verdict}">${result.final === "Allow" ? icon("check") : icon("x")} ${result.final === "Allow" ? "ALLOWED" : "DENIED"}</span>
       </div>
       <div class="metric-row">
-        ${metrics.map(([label, value]) => miniMetric(label, value)).join("")}
+        ${metrics.map(([label, value, hint]) => miniMetric(label, value, hint)).join("")}
       </div>
       ${renderPipeline(result.pipelineSteps)}
       ${renderObligations(result.obligations)}
@@ -796,8 +1020,8 @@ function renderAccessResult(result, principalType) {
   `;
 }
 
-function miniMetric(label, value) {
-  return `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
+function miniMetric(label, value, hint = "") {
+  return `<div><span>${esc(label)}${hint ? tip(hint) : ""}</span><strong>${esc(value)}</strong></div>`;
 }
 
 const pipelineStatusLabels = { pass: "Pass", fail: "Fail", warn: "Warning", info: "Info" };
@@ -979,13 +1203,13 @@ function renderConnectionGrant(data, role, grant) {
           </div>
         </div>
         <div>
-          <h4>Permission Matrix</h4>
+          <h4>Permission Matrix ${tip("Click a cell to cycle Unset → Allow → Deny. Unset is not permission — anything left unset stays denied. An explicit Deny always wins over any Allow from another role.")}</h4>
           ${renderPermissionMatrix(role, grant)}
         </div>
       </div>
       <div class="restrictions-grid">
         <div>
-          <h4>Field-Level Restrictions</h4>
+          <h4>Field-Level Restrictions ${tip("Obligations returned with every Allow. Visible releases the value, Masked redacts it, Hidden never loads it, and Aggregate Only permits totals but no row-level detail.")}</h4>
           <div class="chip-list">
             ${(fieldRestrictionCatalogue[grant.category] || []).map((field) => `
               <label>
@@ -1010,7 +1234,7 @@ function renderConnectionGrant(data, role, grant) {
           </div>
         </div>
         <div>
-          <h4>Source Enforcement Status</h4>
+          <h4>Source Enforcement Status ${tip("Where this grant is actually enforced. “Enforced in HyperContext” filters at answer time; “Provisioned in Source” has been written back to the tool itself. “Unsupported by Source” means the tool has no API to provision it, so it needs a manual task.")}</h4>
           ${selectStatus(role.id, grant.id, grant.sourceProvisioningStatus)}
         </div>
       </div>
@@ -1324,51 +1548,6 @@ function renderAgentPermissions(data, agent) {
       </div>
     </div>
   `;
-}
-
-function renderAuditLogs(data, compact = false) {
-  return `
-    <div class="card">
-      <div class="section-head">
-        <div>
-          <h2>Audit Logs</h2>
-          <p>Permission changes, IAM syncs, lifecycle evaluations and agent events are recorded here.</p>
-        </div>
-      </div>
-      ${compact ? "" : renderAuditFilters(data)}
-      ${auditTable(filteredAudits(data))}
-    </div>
-  `;
-}
-
-function renderAuditFilters(data) {
-  const filters = stateful.filters.audit;
-  const eventTypes = ["", "Role Created", "Role Updated", "Role Disabled", "Role Enabled", "Permission Granted", "Permission Denied", "Resource Scope Updated", "Employee Added to Role", "Employee Removed from Role", "Temporary Access Granted", "Temporary Access Expired", "Assignment Rule Evaluated", "Joiner Access Assigned", "Mover Access Recalculated", "Leaver Access Revoked", "IAM Connected", "IAM Synced", "Source Provisioning Started", "Source Provisioning Completed", "Source Provisioning Failed", "Agent Created", "Agent Disabled", "Agent Permission Changed", "Agent Action Approved", "Agent Action Denied"];
-  return `
-    <div class="filters">
-      ${selectInput("audit.eventType", "Event Type", eventTypes, filters.eventType)}
-      ${selectInput("audit.principalType", "Principal Type", ["", "Role", "Employee", "Agent", "Connection", "IAM Provider"], filters.principalType)}
-      ${selectInput("audit.category", "Category", ["", ...categories.map((category) => category.label)], filters.category)}
-      ${selectInput("audit.tool", "Tool", ["", ...new Set(data.connections.map((connection) => connection.sourceTool))], filters.tool)}
-      ${selectInput("audit.connection", "Connection", ["", ...data.connections.map((connection) => connection.connectionName)], filters.connection)}
-      ${selectInput("audit.performedBy", "Performed By", ["", ...new Set(data.auditEvents.map((event) => event.performedBy))], filters.performedBy)}
-      ${fieldInput("filter.audit.start", "Start date", filters.start, "date")}
-      ${fieldInput("filter.audit.end", "End date", filters.end, "date")}
-    </div>
-  `;
-}
-
-function filteredAudits(data) {
-  const filters = stateful.filters.audit;
-  return data.auditEvents
-    .filter((event) => !filters.eventType || event.eventType === filters.eventType)
-    .filter((event) => !filters.principalType || event.principalType === filters.principalType)
-    .filter((event) => !filters.category || event.category === filters.category)
-    .filter((event) => !filters.tool || event.tool === filters.tool)
-    .filter((event) => !filters.connection || event.connection === filters.connection)
-    .filter((event) => !filters.performedBy || event.performedBy === filters.performedBy)
-    .filter((event) => !filters.start || event.timestamp.slice(0, 10) >= filters.start)
-    .filter((event) => !filters.end || event.timestamp.slice(0, 10) <= filters.end);
 }
 
 function auditTable(events) {
@@ -2151,6 +2330,7 @@ function bindValue(path, value) {
   if (scope === "simulator") write(stateful.simulator, key, value);
   if (scope === "lifecycle") write(stateful.lifecycle, key, value);
   if (scope === "rule") write(stateful.ruleModal ||= {}, key, value);
+  if (scope === "context") write(stateful.context, key, value);
   if (scope === "filter") write(stateful.filters, key, value);
   if (scope === "addRole") stateful.selectedRoleForEmployee = value;
 }
@@ -2222,7 +2402,11 @@ document.addEventListener("change", (event) => {
       return;
     }
   }
-  if (target.matches("[data-bind]")) bindValue(target.dataset.bind, target.type === "checkbox" ? target.checked : target.value);
+  if (target.matches("[data-bind]")) {
+    bindValue(target.dataset.bind, target.type === "checkbox" ? target.checked : target.value);
+    // Free-text composer fields must not re-render on blur, or the Ask click is lost with the DOM.
+    if (target.dataset.bind === "context.draft" || target.dataset.bind === "context.reason") return;
+  }
   if (target.matches("[data-filter]")) bindValue(`filter.${target.dataset.filter}`, target.value);
   if (target.matches("select[data-action]")) {
     handleAction(target);
@@ -2446,6 +2630,59 @@ function handleAction(el) {
     return render();
   }
   if (action === "run-access-simulator") return runAccessSimulator(data);
+  if (action === "context-ask") return askContextQuestion(data);
+  if (action === "context-example") {
+    stateful.context.draft = el.dataset.prompt;
+    return askContextQuestion(store.getState());
+  }
+  if (action === "context-explain") {
+    const index = Number(el.dataset.index);
+    stateful.context.openExplain = stateful.context.openExplain === index ? null : index;
+    return render();
+  }
+  if (action === "context-clear") {
+    stateful.context.thread = [];
+    stateful.context.openExplain = null;
+    return render();
+  }
+  if (action === "confirm-toggle-permissions-layer") {
+    const enabled = data.app.permissionsLayerEnabled !== false;
+    return openConfirm(
+      enabled ? "Turn the permissions layer off?" : "Turn the permissions layer on?",
+      enabled
+        ? "The Decision Service becomes default-closed. Context Layer answers and agent actions will be denied until it is switched back on. Roles and grants are kept."
+        : "The Decision Service resumes evaluating every request against roles, grants, denies and conditions.",
+      "toggle-permissions-layer"
+    );
+  }
+}
+
+function askContextQuestion(data) {
+  const context = stateful.context;
+  const question = context.draft.trim();
+  if (!question) return showToast("Type a question first", "error");
+  const result = answerQuestion(data, {
+    employeeId: context.employeeId,
+    question,
+    managedDevice: context.managedDevice,
+    reason: context.reason
+  });
+  context.thread.push({ question, result });
+  context.openExplain = null;
+  context.draft = "";
+  store.update((draft) => {
+    addAuditEvent(draft, {
+      eventType: "Context Query Evaluated",
+      principalType: "Employee",
+      principal: result.askedBy,
+      source: "Context Layer",
+      summary: `"${question}" — ${result.sources.length} source(s) allowed, ${result.excluded.length} excluded`
+    });
+  });
+  window.requestAnimationFrame(() => {
+    const thread = document.querySelector("#chat-thread");
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  });
 }
 
 function runConfirmAction() {
@@ -2493,6 +2730,13 @@ function runConfirmAction() {
   if (confirm.confirmAction === "toggle-agent") {
     store.update((draft) => toggleAgentStatus(draft, confirm.payload.id));
     showToast("Agent status updated");
+  }
+  if (confirm.confirmAction === "toggle-permissions-layer") {
+    let enabled = true;
+    store.update((draft) => {
+      enabled = togglePermissionsLayer(draft);
+    });
+    showToast(enabled ? "Permissions layer enabled" : "Permissions layer disabled — all requests now deny", enabled ? "success" : "error");
   }
   if (confirm.confirmAction === "delete-agent") {
     store.update((draft) => {

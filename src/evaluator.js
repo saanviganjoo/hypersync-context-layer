@@ -63,6 +63,12 @@ export function evaluateUserAccess(state, input) {
     pipelineSteps
   };
 
+  if (state.app?.permissionsLayerEnabled === false) {
+    result.explanation.push("The permissions layer is disabled, so the Decision Service is default-closed.");
+    step("Decision Service", "fail", "The permissions layer is switched off; every request resolves to Deny.");
+    return result;
+  }
+
   if (!employee) {
     result.explanation.push("No employee matched the selected Employee ID or work email.");
     step("Subject Resolution", "fail", "No employee matched the selected Employee ID or work email.");
@@ -198,6 +204,12 @@ export function evaluateAgentAccess(state, input) {
     obligations: [],
     pipelineSteps
   };
+  if (state.app?.permissionsLayerEnabled === false) {
+    result.explanation.push("The permissions layer is disabled, so the Decision Service is default-closed.");
+    step("Decision Service", "fail", "The permissions layer is switched off; every agent request resolves to Deny.");
+    return result;
+  }
+
   if (!agent || agent.status !== "Active") {
     result.explanation.push("The selected agent is not active.");
     step("Agent Identity", "fail", "The selected agent is not active.");

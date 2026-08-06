@@ -108,7 +108,10 @@ function resources() {
       { id: "folder_audit", type: "Folders", name: "Audit Documents", parentId: "folder_india_finance" },
       { id: "folder_policies", type: "Folders", name: "Employee Policies", parentId: null },
       { id: "folder_engineering_docs", type: "Folders", name: "Engineering Documents", parentId: null },
-      { id: "file_invoice_pack", type: "Files", name: "FY26 invoice pack", parentId: "folder_india_finance" }
+      { id: "file_invoice_pack", type: "Files", name: "FY26 invoice pack", parentId: "folder_india_finance" },
+      { id: "file_audit_report", type: "Files", name: "FY26 statutory audit findings", parentId: "folder_audit" },
+      { id: "file_policy_handbook", type: "Files", name: "Employee handbook FY26", parentId: "folder_policies" },
+      { id: "file_eng_runbook", type: "Files", name: "Platform on-call runbook", parentId: "folder_engineering_docs" }
     ],
     conn_github: [
       { id: "org_tartanhq", type: "Organizations", name: "tartanhq", parentId: null },
@@ -130,7 +133,9 @@ function resources() {
       { id: "space_hr", type: "Spaces", name: "HR Policies", parentId: null },
       { id: "space_support", type: "Spaces", name: "Customer Support Knowledge Base", parentId: null },
       { id: "page_qbr", type: "Pages", name: "Quarterly finance review", parentId: "space_finance" },
-      { id: "page_onboarding", type: "Pages", name: "Employee onboarding", parentId: "space_hr" }
+      { id: "page_onboarding", type: "Pages", name: "Employee onboarding", parentId: "space_hr" },
+      { id: "page_support_playbook", type: "Pages", name: "Refund escalation playbook", parentId: "space_support" },
+      { id: "page_eng_architecture", type: "Pages", name: "Platform architecture decisions", parentId: "space_engineering" }
     ]
   };
 }
@@ -327,7 +332,8 @@ export function createDemoState() {
       assignedEmployeeIds: ["emp_rahul", "emp_aditi"],
       permissions: [
         grant(byId.conn_zoho, { Accounts: ["Search accounts", "View accounts", "Export accounts"], Invoices: ["Search invoices", "View invoices", "Create invoices", "Approve invoices", "Export invoices"], Payments: ["Search payments", "View payments", "Approve payments"] }, { resourceScope: { resourceIds: ["entity_india", "accounts_master", "invoices_india", "payments_india"] }, conditions: { approvalRequired: true, approvalAmount: "250000", maxRecords: 1000 }, fieldRestrictions: { "Bank account number": "Masked", "Tax identifier": "Visible", "Payment details": "Masked" } }),
-        grant(byId.conn_drive, { Drives: ["View drive"], Folders: ["View folder", "Share folder"], Files: ["Search files", "View file metadata", "Read file content", "Download file", "Export file"] }, { resourceScope: { resourceIds: ["drive_finance", "folder_india_finance", "folder_audit"] }, provisionToSource: true, sourceProvisioningStatus: "Provisioned in Source", fieldRestrictions: { "External sharing": "Masked" } })
+        grant(byId.conn_drive, { Drives: ["View drive"], Folders: ["View folder", "Share folder"], Files: ["Search files", "View file metadata", "Read file content", "Download file", "Export file"] }, { resourceScope: { resourceIds: ["drive_finance", "folder_india_finance", "folder_audit", "file_invoice_pack", "file_audit_report"] }, provisionToSource: true, sourceProvisioningStatus: "Provisioned in Source", fieldRestrictions: { "External sharing": "Masked" } }),
+        grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"] }, { resourceScope: { resourceIds: ["space_finance", "page_qbr"] } })
       ]
     },
     {
@@ -342,7 +348,7 @@ export function createDemoState() {
       assignedEmployeeIds: ["emp_sana", "emp_vikram"],
       permissions: [
         grant(byId.conn_jira, { Projects: ["View project"], Tickets: ["Search tickets", "View ticket", "Create ticket", "Edit ticket", "Assign ticket"], Comments: ["View comments", "Add comments"], Attachments: ["View attachments", "Download attachments"] }, { resourceScope: { resourceIds: ["jira_support", "tickets_support"] }, fieldRestrictions: { "Internal comments": "Hidden", "Attachment URLs": "Masked", "Customer personal information": "Masked" } }),
-        grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments", "Add comments"] }, { resourceScope: { resourceIds: ["space_support"] } })
+        grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments", "Add comments"] }, { resourceScope: { resourceIds: ["space_support", "page_support_playbook"] } })
       ]
     },
     {
@@ -357,7 +363,7 @@ export function createDemoState() {
       assignedEmployeeIds: ["emp_ishaan", "emp_neha"],
       permissions: [
         grant(byId.conn_github, { Organizations: ["View organization"], Repositories: ["View repository", "Read code", "Push code", "Manage repository"], Issues: ["View issue", "Create issue", "Edit issue", "Close issue"], "Pull Requests": ["View pull request", "Create pull request", "Review pull request", "Merge pull request"] }, { resourceScope: { resourceIds: ["org_tartanhq", "repo_frontend", "repo_backend", "repo_internal", "gh_prs"] }, provisionToSource: true, sourceProvisioningStatus: "Pending Provisioning" }),
-        grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page", "Create page", "Edit page"], Comments: ["View comments", "Add comments"] }, { resourceScope: { resourceIds: ["space_engineering"] } })
+        grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page", "Create page", "Edit page"], Comments: ["View comments", "Add comments"] }, { resourceScope: { resourceIds: ["space_engineering", "page_eng_architecture"] } })
       ]
     },
     {
@@ -371,7 +377,7 @@ export function createDemoState() {
       assignmentMethod: "Manual",
       assignedEmployeeIds: ["emp_priya"],
       permissions: [
-        grant(byId.conn_darwinbox, { Employees: ["Search employees", "View employee profile", "View employment information", "View compensation", "Update employee profile", "Export employee data"], Employment: ["Read metadata", "Read content", "Update"], Attendance: ["Search", "Read content", "Aggregate"] }, { resourceScope: { resourceIds: ["emp_all", "emp_hr"] }, fieldRestrictions: { Salary: "Visible", "Bank details": "Hidden", "Identity numbers": "Masked", "Personal address": "Masked" }, conditions: { managedDeviceRequired: true, reasonRequired: true } })
+        grant(byId.conn_darwinbox, { Employees: ["Search employees", "View employee profile", "View employment information", "View compensation", "Update employee profile", "Export employee data"], Employment: ["Read metadata", "Read content", "Update"], Attendance: ["Search", "Read content", "Aggregate"] }, { resourceScope: { resourceIds: ["emp_all", "emp_hr", "emp_finance", "attendance_all"] }, fieldRestrictions: { Salary: "Visible", "Bank details": "Hidden", "Identity numbers": "Masked", "Personal address": "Masked" }, conditions: { managedDeviceRequired: true, reasonRequired: true } })
       ]
     },
     {
@@ -386,7 +392,7 @@ export function createDemoState() {
       assignedEmployeeIds: ["emp_kabir", "emp_tanya", "emp_omar"],
       permissions: [
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments"] }, { resourceScope: { resourceIds: ["space_hr", "page_onboarding"] } }),
-        grant(byId.conn_drive, { Folders: ["View folder"], Files: ["Search files", "View file metadata", "Read file content"] }, { resourceScope: { resourceIds: ["folder_policies"] }, fieldRestrictions: { "File download": "Hidden", "External sharing": "Hidden" } })
+        grant(byId.conn_drive, { Folders: ["View folder"], Files: ["Search files", "View file metadata", "Read file content"] }, { resourceScope: { resourceIds: ["folder_policies", "file_policy_handbook"] }, fieldRestrictions: { "File download": "Hidden", "External sharing": "Hidden" } })
       ]
     },
     {
@@ -400,8 +406,8 @@ export function createDemoState() {
       assignmentMethod: "Manual",
       assignedEmployeeIds: ["emp_jia", "emp_rohan"],
       permissions: [
-        grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"] }, { resourceScope: { resourceIds: ["space_engineering", "space_support"] }, conditions: { exportAllowed: false, externalSharingAllowed: false, maxRecords: 50, expiryDate: "2026-09-30" } }),
-        grant(byId.conn_drive, { Files: ["Search files", "View file metadata"] }, { resourceScope: { resourceIds: ["folder_engineering_docs"] }, fieldRestrictions: { "File content": "Hidden", "File download": "Hidden", "External sharing": "Hidden" } })
+        grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"] }, { resourceScope: { resourceIds: ["space_engineering", "space_support", "page_eng_architecture"] }, conditions: { exportAllowed: false, externalSharingAllowed: false, maxRecords: 50, expiryDate: "2026-09-30" } }),
+        grant(byId.conn_drive, { Files: ["Search files", "View file metadata"] }, { resourceScope: { resourceIds: ["folder_engineering_docs", "file_eng_runbook"] }, fieldRestrictions: { "File content": "Hidden", "File download": "Hidden", "External sharing": "Hidden" } })
       ]
     }
   ].map((role, index) => ({
@@ -438,7 +444,7 @@ export function createDemoState() {
       { id: "prov_drive_1", connectionId: "conn_drive", status: "Completed", summary: "Google Drive groups provisioned", timestamp: daysAgo(3) },
       { id: "prov_github_1", connectionId: "conn_github", status: "Pending", summary: "GitHub team membership update queued", timestamp: daysAgo(1) }
     ],
-    app: { lastRoute: "#/permissions", dismissedWarnings: [] }
+    app: { lastRoute: "#/permissions", dismissedWarnings: [], permissionsLayerEnabled: true }
   };
 }
 
@@ -450,6 +456,7 @@ function normalizeState(input) {
     ...input,
     corporate: { ...demo.corporate, ...(input.corporate || {}) },
     currentUser: { ...demo.currentUser, ...(input.currentUser || {}) },
+    app: { ...demo.app, ...(input.app || {}) },
     connections: Array.isArray(input.connections) ? input.connections : demo.connections,
     resources: { ...demo.resources, ...(input.resources || {}) },
     roles: Array.isArray(input.roles) ? input.roles : demo.roles,
@@ -786,4 +793,18 @@ export function toggleAgentStatus(draft, agentId) {
   if (!agent) return;
   agent.status = agent.status === "Disabled" ? "Active" : "Disabled";
   addAuditEvent(draft, { eventType: agent.status === "Disabled" ? "Agent Disabled" : "Agent Permission Changed", principalType: "Agent", principal: agent.name, summary: `${agent.name} is now ${agent.status}` });
+}
+
+export function togglePermissionsLayer(draft) {
+  draft.app.permissionsLayerEnabled = !draft.app.permissionsLayerEnabled;
+  addAuditEvent(draft, {
+    eventType: draft.app.permissionsLayerEnabled ? "Permissions Layer Enabled" : "Permissions Layer Disabled",
+    principalType: "System",
+    principal: "HyperContext Decision Service",
+    source: "Manual",
+    summary: draft.app.permissionsLayerEnabled
+      ? "Permissions layer enabled — Decision Service now evaluates every request."
+      : "Permissions layer disabled — every request now resolves to default-deny."
+  });
+  return draft.app.permissionsLayerEnabled;
 }
