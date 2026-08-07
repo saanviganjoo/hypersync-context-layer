@@ -1,4 +1,5 @@
 import { getActionsForResource } from "./catalogue.js";
+import { isGroupMember, rolesForEmployeeViaGroups } from "./state.js";
 
 const normalize = (value) => String(value || "").trim().toLowerCase();
 
@@ -72,8 +73,9 @@ function ceilingCheck(state, employeeId, input) {
   return { ok: true, reason: `the tool grants "${input.action}" to this account` };
 }
 
+/** Roles reach a person only through group membership — one path, no alternatives. */
 export function rolesForEmployee(state, employeeId) {
-  return state.roles.filter((role) => role.assignedEmployeeIds.includes(employeeId) || state.employees.find((employee) => employee.id === employeeId)?.roleIds?.includes(role.id));
+  return rolesForEmployeeViaGroups(state, employeeId);
 }
 
 export function evaluateUserAccess(state, input) {
@@ -334,57 +336,83 @@ export function evaluateAgentAccess(state, input) {
   return result;
 }
 
+/**
+ * Joiner / mover / leaver, driven entirely by group rules.
+ *
+ * A synced employee record is matched against every group's rule; the groups they
+ * land in decide their roles, and the roles decide what must be provisioned in each
+ * connected tool. Nothing here is role-specific or hand-coded per department.
+ */
 export function simulateLifecycleEvent(state, form) {
   const employee = state.employees.find((item) => item.id === form.employeeId);
   if (!employee) return null;
-  const roleIdsBefore = new Set(employee.roleIds);
-  let roleIdsAfter = new Set(employee.roleIds);
-  const sourceActions = [];
-  const manualActions = [];
-  const conflicts = [];
 
-  if (form.eventType === "Joiner") {
-    state.assignmentRules
-      .filter((rule) => rule.status === "Active" && rule.lifecycleEvents.includes("Joiner"))
-      .forEach((rule) => {
-        if (/Finance/.test(rule.conditions) && employee.department === "Finance") roleIdsAfter.add(rule.roleId);
-        if (/Support/.test(rule.conditions) && employee.department === "Support") roleIdsAfter.add(rule.roleId);
-        if (/github-maintainers/.test(rule.conditions) && employee.department === "Engineering" && employee.grade.startsWith("M")) roleIdsAfter.add(rule.roleId);
+  const groupsFor = (record) => (state.groups || []).filter((group) => isGroupMember(record, group));
+  const rolesFor = (groupList) => {
+    const ids = groupList.map((group) => group.id);
+    return (state.roles || []).filter((role) => role.status === "Active" && (role.groupIds || []).some((groupId) => ids.includes(groupId)));
+  };
+
+  const before = { ...employee };
+  let after = { ...employee };
+  if (form.eventType === "Joiner") after = { ...employee, employmentStatus: "Active" };
+  if (form.eventType === "Mover") after = { ...employee, [form.changedField]: form.newValue };
+  if (form.eventType === "Leaver") after = { ...employee, employmentStatus: "Terminated" };
+
+  const groupsBefore = form.eventType === "Joiner" ? [] : groupsFor(before);
+  const groupsAfter = form.eventType === "Leaver" ? [] : groupsFor(after);
+  const rolesBefore = form.eventType === "Joiner" ? [] : rolesFor(groupsBefore);
+  const rolesAfter = form.eventType === "Leaver" ? [] : rolesFor(groupsAfter);
+
+  const nameOf = (items) => items.map((item) => item.name);
+  const added = rolesAfter.filter((role) => !rolesBefore.some((item) => item.id === role.id));
+  const removed = rolesBefore.filter((role) => !rolesAfter.some((item) => item.id === role.id));
+  const retained = rolesAfter.filter((role) => rolesBefore.some((item) => item.id === role.id));
+
+  // What has to change in each tool, derived from the grants the roles carry.
+  const planFor = (roles, verb) => {
+    const byConnection = new Map();
+    roles.forEach((role) => (role.permissions || []).forEach((permission) => {
+      const connection = state.connections.find((item) => item.id === permission.connectionId);
+      if (!connection) return;
+      const entry = byConnection.get(connection.id) || { connection, roles: new Set(), actions: new Set() };
+      entry.roles.add(role.name);
+      Object.entries(permission.matrix || {}).forEach(([resourceType, actions]) => {
+        Object.entries(actions).filter(([, effect]) => effect === "allow").forEach(([action]) => entry.actions.add(`${resourceType}: ${action}`));
       });
-    sourceActions.push("Create or match HyperContext principal", "Activate HyperContext permissions");
-  }
+      byConnection.set(connection.id, entry);
+    }));
+    return [...byConnection.values()].map((entry) => ({
+      connectionName: entry.connection.connectionName,
+      tool: entry.connection.sourceTool,
+      category: entry.connection.category,
+      verb,
+      viaRoles: [...entry.roles],
+      actionCount: entry.actions.size,
+      writable: entry.connection.sourcePermissionsCanUpdate !== false,
+      note: entry.connection.sourcePermissionsCanUpdate === false
+        ? `${entry.connection.sourceTool} has no write API - this becomes a manual task.`
+        : `${verb} ${entry.actions.size} action(s) in ${entry.connection.sourceTool}.`
+    }));
+  };
 
-  if (form.eventType === "Mover") {
-    const changedEmployee = { ...employee, [form.changedField]: form.newValue };
-    roleIdsAfter = new Set(["role_general_employee"]);
-    if (changedEmployee.department === "Finance" && ["M2", "M3", "M4", "M5"].includes(changedEmployee.grade)) roleIdsAfter.add("role_finance_manager");
-    if (changedEmployee.department === "Support") roleIdsAfter.add("role_support_agent");
-    if (changedEmployee.department === "Engineering" && changedEmployee.grade.startsWith("M")) roleIdsAfter.add("role_engineering_lead");
-    sourceActions.push("Recalculate applicable roles", "Remove obsolete permissions", "Apply newly applicable permissions");
-  }
-
-  if (form.eventType === "Leaver") {
-    roleIdsAfter = new Set();
-    sourceActions.push("Disable HyperContext access", "Revoke active role assignments", "Revoke delegated agent access");
-    manualActions.push("Create manual revocation task for Zoho Books because source provisioning is unsupported");
-  }
-
-  const rolesToAdd = [...roleIdsAfter].filter((roleId) => !roleIdsBefore.has(roleId)).map((roleId) => state.roles.find((role) => role.id === roleId)?.name).filter(Boolean);
-  const rolesToRemove = [...roleIdsBefore].filter((roleId) => !roleIdsAfter.has(roleId)).map((roleId) => state.roles.find((role) => role.id === roleId)?.name).filter(Boolean);
-  const rolesRetained = [...roleIdsAfter].filter((roleId) => roleIdsBefore.has(roleId)).map((roleId) => state.roles.find((role) => role.id === roleId)?.name).filter(Boolean);
-  if (rolesToAdd.includes("Finance Manager") && rolesToAdd.includes("Contractor")) conflicts.push("Finance Manager and Contractor contain conflicting export policies.");
+  const grantPlan = planFor(added, "Grant");
+  const revokePlan = planFor(removed, "Revoke");
+  const manualActions = [...grantPlan, ...revokePlan].filter((item) => !item.writable).map((item) => item.note);
 
   return {
     employeeId: employee.id,
     employeeName: employee.name,
     eventType: form.eventType,
-    rolesToAdd,
-    rolesToRemove,
-    rolesRetained,
-    permissionsGained: rolesToAdd.length ? rolesToAdd.map((role) => `${role} permissions`) : ["No new permissions"],
-    permissionsRemoved: rolesToRemove.length ? rolesToRemove.map((role) => `${role} permissions`) : ["No permissions removed"],
-    sourceProvisioningActions: sourceActions,
-    manualActionsRequired: manualActions,
-    conflictsDetected: conflicts
+    groupsBefore: nameOf(groupsBefore),
+    groupsAfter: nameOf(groupsAfter),
+    groupsGained: nameOf(groupsAfter.filter((group) => !groupsBefore.some((item) => item.id === group.id))),
+    groupsLost: nameOf(groupsBefore.filter((group) => !groupsAfter.some((item) => item.id === group.id))),
+    rolesToAdd: nameOf(added),
+    rolesToRemove: nameOf(removed),
+    rolesRetained: nameOf(retained),
+    grantPlan,
+    revokePlan,
+    manualActionsRequired: manualActions
   };
 }

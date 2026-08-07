@@ -13,18 +13,16 @@ import {
 } from "./catalogue.js";
 import {
   addAuditEvent,
-  addEmployeesToRole,
-  connectIamProvider,
   createAgentProfile,
   createConnectionFromDraft,
   createRoleFromDraft,
   deleteRole,
   duplicateRole,
-  MEMBERSHIP_KINDS,
-  membershipFromMethods,
+  GROUP_RULE_FIELDS,
+  groupMembers,
+  groupsForEmployee,
   ROLE_ORIGINS,
   store,
-  syncIamProvider,
   toggleAgentStatus,
   togglePermissionsLayer,
   toggleRoleStatus
@@ -38,17 +36,14 @@ const toastRoot = document.querySelector("#toast-root");
 const stateful = {
   filters: {
     roles: { q: "", origin: "", membership: "", status: "", category: "", tool: "" },
-    employees: { q: "", department: "", designation: "", role: "", status: "", source: "" }
+    employees: { q: "", department: "", group: "", status: "" }
   },
   modal: null,
   confirm: null,
   pendingCategory: "",
   connectionWizard: null,
   roleWizard: null,
-  iamWizard: null,
-  importModal: null,
   agentWizard: null,
-  ruleModal: null,
   simulator: {
     principalType: "Employee",
     employeeId: "emp_rahul",
@@ -88,15 +83,17 @@ const stateful = {
 };
 
 const navItems = [
-  ["dashboard", "Dashboard", "layout-dashboard"],
-  ["context", "Context Layer", "sparkle"],
-  ["permissions", "Permissions", "shield"]
+  ["dashboard", "Tools", "plug"],
+  ["directory", "Directory", "users"],
+  ["permissions", "Roles & Groups", "shield"],
+  ["context", "Context Layer", "sparkle"]
 ];
 
 const pageTitles = {
-  dashboard: ["Dashboard", "Enable the permissions layer, manage connected tools and review recent access activity."],
-  context: ["Context Layer", "Ask a question across every connected tool. Answers are built only from records the asker is already allowed to read."],
-  permissions: ["Permissions & Access", "Control which employees and AI agents can access connected tools, resources, data and actions."]
+  dashboard: ["Connected Tools", "Sync a tool and HyperSync reads what every person can already do inside it."],
+  directory: ["Directory", "Every synced person. Open anyone to see what they can do across every connected tool."],
+  permissions: ["Roles & Groups", "A group decides who. A role decides what they may do. New joiners match a group rule and are provisioned automatically."],
+  context: ["Context Layer", "Ask a question across every connected tool. Answers are built only from records the asker is already allowed to read."]
 };
 
 function esc(value) {
@@ -135,6 +132,8 @@ function icon(name) {
   const paths = {
     "layout-dashboard": "<rect x='3' y='3' width='7' height='8' rx='1.5'/><rect x='14' y='3' width='7' height='5' rx='1.5'/><rect x='14' y='12' width='7' height='9' rx='1.5'/><rect x='3' y='15' width='7' height='6' rx='1.5'/>",
     refresh: "<path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/>",
+    plug: "<path d='M12 22v-5'/><path d='M9 8V2M15 8V2'/><path d='M7 8h10v4a5 5 0 0 1-10 0z'/>",
+    users: "<path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><path d='M22 21v-2a4 4 0 0 0-3-3.87'/><path d='M16 3.13a4 4 0 0 1 0 7.75'/>",
     shield: "<path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/><path d='M9 12l2 2 4-5'/>",
     plus: "<path d='M12 5v14M5 12h14'/>",
     upload: "<path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'/><path d='M17 8l-5-5-5 5'/><path d='M12 3v12'/>",
@@ -243,8 +242,9 @@ function render() {
 function renderPage(data, current) {
   const [section, subSection, idValue] = current.parts;
   if (section === "permissions" && subSection === "roles" && idValue) return renderRoleDetails(data, idValue, current.params.get("tab") || stateful.activeTabs.roleDetails);
-  if (section === "permissions" && subSection === "employees" && idValue) return renderEmployeeDetails(data, idValue, current.params.get("tab") || stateful.activeTabs.employeeDetails);
   if (section === "permissions" && subSection === "agents" && idValue) return renderAgentDetails(data, idValue, current.params.get("tab") || stateful.activeTabs.agentDetails);
+  if (section === "directory" && subSection) return renderEmployeeDetails(data, subSection, current.params.get("tab") || stateful.activeTabs.employeeDetails);
+  if (section === "directory") return renderDirectory(data);
   if (section === "context") return renderContextLayer(data);
   if (section === "permissions") return renderPermissions(data, current.params.get("tab") || stateful.activeTabs.permissions);
   return renderDashboard(data);
@@ -315,7 +315,7 @@ function activityTone(eventType) {
 function renderLayerEnabler(data) {
   const enabled = data.app.permissionsLayerEnabled !== false;
   const configuredRoles = data.roles.filter((role) => role.status === "Active" && role.permissions.length);
-  const coveredEmployees = data.employees.filter((employee) => employee.roleIds.length);
+  const coveredEmployees = data.employees.filter((employee) => rolesForEmployee(data, employee.id).length);
   const governedAgents = data.agents.filter((agent) => agent.status === "Active");
   const checklist = [
     ["Tools connected", data.connections.length, `${data.connections.length} connections across ${new Set(data.connections.map((item) => item.category)).size} categories`, data.connections.length > 0],
@@ -553,7 +553,7 @@ function renderContextSidebar(data, employee, roles, reachable) {
         <p class="muted">The Context Layer and the Access Simulator call one Decision Service, so a result here can always be reproduced there.</p>
         <div class="page-actions compact">
           ${actionButton("Open Access Simulator", "open-access-simulator", "secondary")}
-          <button class="btn secondary" data-route="/permissions/employees/${employee.id}" data-query-tab="effective">View effective access</button>
+          <button class="btn secondary" data-route="/directory/${employee.id}" data-query-tab="effective">View effective access</button>
         </div>
       </div>
     </div>
@@ -608,59 +608,74 @@ function connectionTable(connections) {
 function renderPermissions(data, activeTab) {
   stateful.activeTabs.permissions = activeTab;
   const activeRoles = data.roles.filter((role) => role.status === "Active");
-  const coveredEmployees = new Set(activeRoles.flatMap((role) => role.assignedEmployeeIds)).size;
-  const governedTools = new Set(data.connections.filter((connection) => connection.status === "Active").map((connection) => connection.sourceTool)).size;
-  const activeRules = data.assignmentRules.filter((rule) => rule.status === "Active").length;
-  const tabs = ["roles", "employees", "assignment-rules", "agent-access"];
+  const coveredEmployees = data.employees.filter((employee) => rolesForEmployee(data, employee.id).length).length;
+  const tabs = ["roles", "groups", "agent-access"];
   return `
-    <div class="quick-actions-grid">
-      <div class="quick-action-card" data-action="open-role-wizard">
-        <span class="qa-icon blue">${icon("plus")}</span>
-        <strong>Create a role</strong>
-        <span>Launch the role wizard to define a new permission grant.</span>
-      </div>
-      <div class="quick-action-card" data-action="open-access-simulator">
-        <span class="qa-icon green">${icon("search")}</span>
-        <strong>Test access</strong>
-        <span>Run the Access Simulator for an employee or agent.</span>
-      </div>
-      <div class="quick-action-card" data-route="/permissions" data-query-tab="assignment-rules">
-        <span class="qa-icon amber">${icon("refresh")}</span>
-        <strong>Assignment rules</strong>
-        <span>Review HRMS-driven joiner/mover/leaver automation.</span>
-      </div>
-      <div class="quick-action-card" data-route="/permissions" data-query-tab="agent-access">
-        <span class="qa-icon red">${icon("bolt")}</span>
-        <strong>Agent access</strong>
-        <span>Govern AI agent identities, scopes and approvals.</span>
-      </div>
+    <div class="flow-strip">
+      <div class="flow-step"><span>1</span><div><strong>Group</strong><small>Who they are — one rule, matched on sync</small></div></div>
+      <div class="flow-arrow">${icon("chevron")}</div>
+      <div class="flow-step"><span>2</span><div><strong>Role</strong><small>What they may do in each tool</small></div></div>
+      <div class="flow-arrow">${icon("chevron")}</div>
+      <div class="flow-step"><span>3</span><div><strong>Effective access</strong><small>Narrowed by what the tool already allows</small></div></div>
     </div>
     <div class="page-actions">
-      ${actionButton(`${icon("key")} Connect IAM`, "open-iam-wizard", "secondary")}
-      ${actionButton(`${icon("upload")} Import Role Mapping`, "open-import-modal", "secondary")}
-      ${actionButton(`${icon("plus")} Create New Role`, "open-role-wizard", "primary")}
+      ${actionButton(`${icon("search")} Test access`, "open-access-simulator", "secondary")}
+      ${actionButton(`${icon("plus")} Create group`, "open-group-modal", "secondary")}
+      ${actionButton(`${icon("plus")} Create role`, "open-role-wizard", "primary")}
     </div>
-    <div class="summary-grid four">
-      ${summaryCard("Total Roles", data.roles.length, "Active, draft, disabled and system-defined")}
-      ${summaryCard("Employees Covered", coveredEmployees, "Unique employees with at least one active role")}
-      ${summaryCard("Connected Tools Governed", governedTools, "Tools available for permission policies")}
-      ${summaryCard("Active Assignment Rules", activeRules, "IAM, HRMS and import-driven rules")}
-    </div>
-    <div class="info-banner">
-      <span>Effective access is determined by source-system permissions, HyperContext role policies, explicit restrictions and runtime conditions.</span>
+    <div class="summary-grid">
+      ${summaryCard("Groups", (data.groups || []).length, "Each carries one rule that decides membership")}
+      ${summaryCard("Roles", activeRoles.length, "Permission bundles attached to groups")}
+      ${summaryCard("People covered", coveredEmployees, "Reached by at least one role, through a group")}
+      ${summaryCard("Tools governed", new Set(data.connections.filter((connection) => connection.status === "Active").map((connection) => connection.sourceTool)).size, "Connections feeding the decision engine")}
     </div>
     <div class="tabs">
       ${tabs.map((tab) => `<button class="tab ${activeTab === tab ? "active" : ""}" data-route="/permissions" data-query-tab="${tab}">${tabLabel(tab)}</button>`).join("")}
     </div>
     ${activeTab === "roles" ? renderRolesTab(data) : ""}
-    ${activeTab === "employees" ? renderEmployeesTab(data) : ""}
-    ${activeTab === "assignment-rules" ? renderAssignmentRulesTab(data) : ""}
+    ${activeTab === "groups" ? renderGroupsTab(data) : ""}
     ${activeTab === "agent-access" ? renderAgentAccessTab(data) : ""}
   `;
 }
 
+function renderGroupsTab(data) {
+  const groups = data.groups || [];
+  return `
+    <div class="card">
+      <div class="section-head">
+        <div>
+          <h2>Groups ${tip("A group is the only way anyone gets a role. Its rule is matched against each synced employee record, so a new joiner lands in the right groups automatically and is provisioned from there.")}</h2>
+          <p>One rule per group. Membership is recalculated on every sync — there is nothing to assign by hand.</p>
+        </div>
+        ${actionButton(`${icon("plus")} Create group`, "open-group-modal", "secondary")}
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Group</th><th>Rule</th><th>Members</th><th>Roles granted</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${groups.map((group) => {
+              const members = groupMembers(data, group);
+              const roles = data.roles.filter((role) => (role.groupIds || []).includes(group.id));
+              return `
+                <tr>
+                  <td><strong>${esc(group.name)}</strong><small>${esc(group.description || "")}</small></td>
+                  <td><code>${esc(group.rule)}</code></td>
+                  <td>${members.length}<small>${esc(members.slice(0, 3).map((employee) => employee.name.split(" ")[0]).join(", "))}${members.length > 3 ? ` +${members.length - 3}` : ""}</small></td>
+                  <td>${roles.map((role) => badge(role.name, "neutral")).join(" ") || `<span class="muted">No role yet</span>`}</td>
+                  <td><div class="row-actions"><button title="Edit group" data-action="edit-group" data-id="${group.id}">${icon("edit")}</button><button title="Delete group" data-action="delete-group" data-id="${group.id}" ${roles.length ? "disabled aria-label='Detach its roles first'" : ""}>${icon("trash")}</button></div></td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    ${renderLifecycleSimulator(data)}
+  `;
+}
+
 function tabLabel(tab) {
-  return { roles: "Roles", employees: "Employees", "assignment-rules": "Assignment Rules", "agent-access": "Agent Access" }[tab] || tab;
+  return { roles: "Roles", groups: "Groups", "agent-access": "Agent Access" }[tab] || tab;
 }
 
 function renderRolesTab(data) {
@@ -684,7 +699,6 @@ function renderRolesTab(data) {
       <div class="filters">
         ${searchInput("roles.q", "Search roles", filters.q)}
         ${selectInput("roles.origin", "Origin", ["", ...ROLE_ORIGINS], filters.origin)}
-        ${selectInput("roles.membership", "Membership", ["", ...MEMBERSHIP_KINDS], filters.membership)}
         ${selectInput("roles.status", "Status", ["", "Active", "Draft", "Disabled"], filters.status)}
         ${selectInput("roles.category", "Category", ["", ...categories.map((category) => category.label)], filters.category)}
         ${selectInput("roles.tool", "Connected tool", ["", ...new Set(data.connections.map((connection) => connection.sourceTool))], filters.tool)}
@@ -709,7 +723,7 @@ function renderRolesTab(data) {
                 <td><strong>${esc(role.name)}</strong><small>${esc(role.code)}</small></td>
                 <td>${badge(role.origin, role.origin === "Suggested from tool sync" ? "allow" : "neutral")}</td>
                 <td>${(role.membership || []).map((kind) => badge(kind, "neutral")).join(" ") || badge("Manual list", "neutral")}</td>
-                <td>${role.assignedEmployeeIds.length}</td>
+                <td>${new Set((data.groups || []).filter((group) => (role.groupIds || []).includes(group.id)).flatMap((group) => groupMembers(data, group)).map((employee) => employee.id)).size}</td>
                 <td>${esc([...new Set(role.permissions.map((permission) => permission.tool))].join(", ") || "No tools")}</td>
                 <td>${badge(role.status, role.status === "Active" ? "active" : role.status === "Draft" ? "draft" : "disabled")}</td>
                 <td>${formatDate(role.updatedAt)}</td>
@@ -747,119 +761,68 @@ function selectInput(key, label, options, value) {
   `;
 }
 
-function renderEmployeesTab(data) {
+function renderDirectory(data) {
   const filters = stateful.filters.employees;
-  const roleOptions = data.roles.map((role) => role.name);
   const filtered = data.employees
     .filter((employee) => !filters.q || `${employee.name} ${employee.employeeId} ${employee.workEmail}`.toLowerCase().includes(filters.q.toLowerCase()))
     .filter((employee) => !filters.department || employee.department === filters.department)
-    .filter((employee) => !filters.designation || employee.designation === filters.designation)
-    .filter((employee) => !filters.status || employee.accessStatus === filters.status)
-    .filter((employee) => !filters.source || employee.assignmentSource === filters.source)
-    .filter((employee) => !filters.role || rolesForEmployee(data, employee.id).some((role) => role.name === filters.role));
+    .filter((employee) => !filters.group || groupsForEmployee(data, employee.id).some((group) => group.name === filters.group))
+    .filter((employee) => !filters.status || employee.accessStatus === filters.status);
   return `
+    <div class="summary-grid">
+      ${summaryCard("People synced", data.employees.length, "Pulled from the HRMS connection")}
+      ${summaryCard("Tools read", data.connections.filter((connection) => connection.status === "Active").length, "Each contributes what this person can already do")}
+      ${summaryCard("Groups", (data.groups || []).length, "Membership recalculated on every sync")}
+      ${summaryCard("Ceiling observed", ceilingAge(data), "How fresh the permission snapshot is")}
+    </div>
     <div class="card">
       <div class="section-head">
         <div>
-          <h2>Employees</h2>
-          <p>Employee ID and work email are used for identity matching. Names are display-only.</p>
+          <h2>Directory</h2>
+          <p>Open anyone to see every permission they hold, in every connected tool, and why.</p>
         </div>
       </div>
       <div class="filters">
-        ${searchInput("employees.q", "Employee search", filters.q)}
+        ${searchInput("employees.q", "Search people", filters.q)}
         ${selectInput("employees.department", "Department", ["", ...new Set(data.employees.map((employee) => employee.department))], filters.department)}
-        ${selectInput("employees.designation", "Designation", ["", ...new Set(data.employees.map((employee) => employee.designation))], filters.designation)}
-        ${selectInput("employees.role", "Role", ["", ...roleOptions], filters.role)}
-        ${selectInput("employees.status", "Status", ["", "Active", "Pending Evaluation", "Partially Configured", "Revoked"], filters.status)}
-        ${selectInput("employees.source", "Membership", ["", ...MEMBERSHIP_KINDS], filters.source)}
+        ${selectInput("employees.group", "Group", ["", ...(data.groups || []).map((group) => group.name)], filters.group)}
+        ${selectInput("employees.status", "Access status", ["", "Active", "Revoked"], filters.status)}
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Employee</th>
-              <th>Employee ID</th>
-              <th>Work Email</th>
+              <th>Person</th>
               <th>Department</th>
               <th>Designation</th>
-              <th>Grade</th>
-              <th>Location</th>
-              <th>Assigned Roles</th>
-              <th>Assignment Source</th>
-              <th>Access Status</th>
-              <th>Last Evaluated</th>
-              <th>Actions</th>
+              <th>Groups</th>
+              <th>Roles</th>
+              <th>Tools reached</th>
+              <th>Status</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            ${filtered.map((employee) => `
-              <tr class="clickable-row" data-route="/permissions/employees/${employee.id}">
-                <td><strong>${esc(employee.name)}</strong></td>
-                <td>${esc(employee.employeeId)}</td>
-                <td>${esc(employee.workEmail)}</td>
-                <td>${esc(employee.department)}</td>
-                <td>${esc(employee.designation)}</td>
-                <td>${esc(employee.grade)}</td>
-                <td>${esc(employee.location)}</td>
-                <td>${rolesForEmployee(data, employee.id).map((role) => role.name).join(", ") || "None"}</td>
-                <td>${esc(employee.assignmentSource)}</td>
-                <td>${badge(employee.accessStatus, employee.accessStatus === "Active" ? "active" : "disabled")}</td>
-                <td>${formatDate(employee.lastEvaluated)}</td>
-                <td><button class="link-btn" data-route="/permissions/employees/${employee.id}" data-stop-row>View Employee</button></td>
-              </tr>
-            `).join("")}
+            ${filtered.map((employee) => {
+              const groups = groupsForEmployee(data, employee.id);
+              const roles = rolesForEmployee(data, employee.id);
+              const tools = new Set(observedRowsFor(data, employee.id).map((row) => byId(data.connections, row.connectionId)?.sourceTool).filter(Boolean));
+              return `
+                <tr class="clickable-row" data-route="/directory/${employee.id}">
+                  <td><strong>${esc(employee.name)}</strong><small>${esc(employee.employeeId)} · ${esc(employee.workEmail)}</small></td>
+                  <td>${esc(employee.department)}</td>
+                  <td>${esc(employee.designation)}</td>
+                  <td>${groups.map((group) => badge(group.name, "neutral")).join(" ") || `<span class="muted">None</span>`}</td>
+                  <td>${roles.map((role) => role.name).join(", ") || `<span class="muted">None</span>`}</td>
+                  <td>${tools.size}</td>
+                  <td>${badge(employee.accessStatus, employee.accessStatus === "Active" ? "active" : "disabled")}</td>
+                  <td><button class="link-btn" data-route="/directory/${employee.id}" data-stop-row>View access</button></td>
+                </tr>
+              `;
+            }).join("") || `<tr><td colspan="8"><div class="empty-state small">No one matches those filters.</div></td></tr>`}
           </tbody>
         </table>
       </div>
-    </div>
-  `;
-}
-
-function renderAssignmentRulesTab(data) {
-  return `
-    <div class="grid-two">
-      <div class="card">
-        <div class="section-head">
-          <div>
-            <h2>Assignment Rules</h2>
-            <p>HRMS lifecycle events recalculate access and remove obsolete permissions.</p>
-          </div>
-          ${actionButton(`${icon("plus")} Create Rule`, "open-rule-modal", "primary")}
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Rule Name</th>
-                <th>Role</th>
-                <th>Source</th>
-                <th>Conditions</th>
-                <th>Matching Employees</th>
-                <th>Lifecycle Events</th>
-                <th>Status</th>
-                <th>Last Evaluated</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${data.assignmentRules.map((rule) => `
-                <tr>
-                  <td><strong>${esc(rule.name)}</strong></td>
-                  <td>${esc(byId(data.roles, rule.roleId)?.name || "Unknown role")}</td>
-                  <td>${esc(rule.source)}</td>
-                  <td>${esc(rule.conditions)}</td>
-                  <td>${rule.matchingEmployeeIds.length}</td>
-                  <td>${esc(rule.lifecycleEvents.join(", "))}</td>
-                  <td>${badge(rule.status, rule.status === "Active" ? "active" : "disabled")}</td>
-                  <td>${formatDate(rule.lastEvaluated)}</td>
-                  <td><div class="row-actions"><button data-action="duplicate-rule" data-id="${rule.id}">${icon("copy")}</button><button data-action="toggle-rule" data-id="${rule.id}">${icon("bolt")}</button><button data-action="delete-rule" data-id="${rule.id}">${icon("trash")}</button></div></td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      ${renderLifecycleSimulator(data)}
     </div>
   `;
 }
@@ -871,7 +834,7 @@ function renderLifecycleSimulator(data) {
       <div class="section-head">
         <div>
           <h2>HRMS Event Simulator ${tip("Nothing is written to a connected tool until you apply the plan. Every provisioning change is previewed as a diff first, so a bad rule is caught before it reaches production.")}</h2>
-          <p>Run joiner, mover and leaver previews before mutating state.</p>
+          <p>A synced record is matched against every group rule. The groups decide the roles, the roles decide what to provision.</p>
         </div>
       </div>
       <div class="form-grid one">
@@ -885,38 +848,56 @@ function renderLifecycleSimulator(data) {
         ${actionButton("Run Simulation", "run-lifecycle-simulation", "primary")}
         ${actionButton("Apply Simulated Event", "apply-lifecycle-simulation", "secondary", sim.result ? "" : "disabled")}
       </div>
-      ${sim.result ? renderSimulationResult(sim.result) : `<div class="empty-state small">Simulation results will show roles to add, roles to remove, gained permissions, removed permissions, source provisioning actions, manual actions and conflicts.</div>`}
+      ${sim.result ? renderSimulationResult(sim.result) : `<div class="empty-state small">Pick a person and an event to preview which groups they match, which roles that gives them, and what changes in each tool.</div>`}
     </div>
   `;
 }
 
 function renderSimulationResult(result) {
-  const retained = result.rolesRetained || [];
-  const added = result.rolesToAdd || [];
-  const removed = result.rolesToRemove || [];
+  const plan = [...result.grantPlan, ...result.revokePlan];
+  const chips = (items, tone = "") => items.length ? items.map((item) => `<span class="chip ${tone}">${esc(item)}</span>`).join("") : `<span class="muted">None</span>`;
   return `
     <div class="result-panel">
-      <h3>${esc(result.eventType)} simulation for ${esc(result.employeeName)}</h3>
-      <div class="sim-diff">
-        <div class="sim-diff-col">
-          <h4>Retained</h4>
-          ${retained.length ? retained.map((role) => `<div class="diff-item retained">${esc(role)}</div>`).join("") : `<div class="diff-item empty">None</div>`}
+      <h3>${esc(result.eventType)} · ${esc(result.employeeName)}</h3>
+      <div class="sim-flow">
+        <div class="sim-flow-step">
+          <h4>1 · Groups matched</h4>
+          <div class="chip-wrap">${chips(result.groupsAfter)}</div>
+          ${result.groupsGained.length ? `<small class="added-note">Joins ${esc(result.groupsGained.join(", "))}</small>` : ""}
+          ${result.groupsLost.length ? `<small class="removed-note">Leaves ${esc(result.groupsLost.join(", "))}</small>` : ""}
         </div>
-        <div class="sim-diff-arrow">${icon("chevron")}</div>
-        <div class="sim-diff-col">
-          <h4>Removed</h4>
-          ${removed.length ? removed.map((role) => `<div class="diff-item removed">${esc(role)}</div>`).join("") : `<div class="diff-item empty">None</div>`}
+        <div class="sim-flow-arrow">${icon("chevron")}</div>
+        <div class="sim-flow-step">
+          <h4>2 · Roles inherited</h4>
+          <div class="chip-wrap">${chips(result.rolesToAdd)}</div>
+          ${result.rolesToRemove.length ? `<small class="removed-note">Removes ${esc(result.rolesToRemove.join(", "))}</small>` : ""}
+          ${result.rolesRetained.length ? `<small class="muted">Keeps ${esc(result.rolesRetained.join(", "))}</small>` : ""}
         </div>
-        <div class="sim-diff-col">
-          <h4>Added</h4>
-          ${added.length ? added.map((role) => `<div class="diff-item added">${esc(role)}</div>`).join("") : `<div class="diff-item empty">None</div>`}
+        <div class="sim-flow-arrow">${icon("chevron")}</div>
+        <div class="sim-flow-step">
+          <h4>3 · Provision in each tool</h4>
+          <div class="chip-wrap">${plan.length ? `<span class="chip">${plan.length} tool change(s)</span>` : `<span class="muted">Nothing to change</span>`}</div>
         </div>
       </div>
-      <div class="chip-row">
-        <div><strong>Source provisioning actions</strong>${chipList(result.sourceProvisioningActions)}</div>
-        <div><strong>Manual actions required</strong>${chipList(result.manualActionsRequired)}</div>
-        ${result.conflictsDetected?.length ? `<div><strong>Conflicts detected</strong>${chipList(result.conflictsDetected, "conflict")}</div>` : ""}
-      </div>
+      ${plan.length ? `
+        <div class="table-wrap tight">
+          <table class="intersect-table">
+            <thead><tr><th>Tool</th><th>Change</th><th>Actions</th><th>Via role</th><th>How it lands</th></tr></thead>
+            <tbody>
+              ${plan.map((item) => `
+                <tr class="${item.writable ? "" : "intersect-row ceiling"}">
+                  <td><strong>${esc(item.tool)}</strong><small>${esc(item.connectionName)}</small></td>
+                  <td>${badge(item.verb, item.verb === "Grant" ? "allow" : "deny")}</td>
+                  <td>${item.actionCount}</td>
+                  <td>${esc(item.viaRoles.join(", "))}</td>
+                  <td class="why">${item.writable ? `Written through the connector automatically.` : esc(item.note)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      ` : `<div class="empty-state small">This event changes no permissions.</div>`}
+      ${result.manualActionsRequired.length ? `<div class="warning">${result.manualActionsRequired.map((note) => esc(note)).join("<br />")}</div>` : ""}
     </div>
   `;
 }
@@ -1128,10 +1109,10 @@ function renderRoleOverview(data, role) {
           ${definition("Current corporate", role.currentCorporate)}
           ${definition("Creation date", formatDate(role.createdAt))}
           ${definition("Last updated", formatDate(role.updatedAt))}
-          ${definition("Assigned employee count", role.assignedEmployeeIds.length)}
+          ${definition("People reached", new Set((data.groups || []).filter((group) => (role.groupIds || []).includes(group.id)).flatMap((group) => groupMembers(data, group)).map((employee) => employee.id)).size)}
           ${definition("Connected tool count", new Set(role.permissions.map((permission) => permission.tool)).size)}
           ${definition("Selected resource count", resources.size)}
-          ${definition("Active assignment rules", data.assignmentRules.filter((rule) => rule.roleId === role.id && rule.status === "Active").length)}
+          ${definition("Groups", (data.groups || []).filter((group) => (role.groupIds || []).includes(group.id)).map((group) => group.name).join(", ") || "None")}
           ${definition("Source provisioning coverage", `${role.permissions.filter((permission) => getToolCapability(permission.tool).supportsProvisioning).length}/${role.permissions.length || 1} connections`)}
         </div>
       </div>
@@ -1305,7 +1286,7 @@ function selectStatus(roleId, grantId, value) {
 }
 
 function renderRoleEmployees(data, role) {
-  const employees = data.employees.filter((employee) => role.assignedEmployeeIds.includes(employee.id));
+  const employees = [...new Map((data.groups || []).filter((group) => (role.groupIds || []).includes(group.id)).flatMap((group) => groupMembers(data, group)).map((employee) => [employee.id, employee])).values()];
   return `
     <div class="card">
       <div class="section-head">
@@ -1333,7 +1314,7 @@ function renderRoleEmployees(data, role) {
                 <td>2026-07-01</td>
                 <td>Open-ended</td>
                 <td>${badge(employee.accessStatus, employee.accessStatus === "Active" ? "active" : "disabled")}</td>
-                <td><div class="row-actions"><button data-route="/permissions/employees/${employee.id}">View Employee</button><button data-action="remove-employee-role" data-role-id="${role.id}" data-employee-id="${employee.id}">Remove</button><button data-action="temp-employee-role" data-role-id="${role.id}" data-employee-id="${employee.id}">Temporary</button><button data-route="/permissions/employees/${employee.id}?tab=explanation">Explain</button></div></td>
+                <td><div class="row-actions"><button data-route="/directory/${employee.id}">View Employee</button><button data-action="remove-employee-role" data-role-id="${role.id}" data-employee-id="${employee.id}">Remove</button><button data-action="temp-employee-role" data-role-id="${role.id}" data-employee-id="${employee.id}">Temporary</button><button data-route="/directory/${employee.id}?tab=explanation">Explain</button></div></td>
               </tr>
             `).join("")}
           </tbody>
@@ -1344,7 +1325,7 @@ function renderRoleEmployees(data, role) {
 }
 
 function renderRoleRules(data, role) {
-  const rules = data.assignmentRules.filter((rule) => rule.roleId === role.id);
+  const rules = (data.groups || []).filter((group) => (role.groupIds || []).includes(group.id));
   return `
     <div class="card">
       <h2>Assignment Rules</h2>
@@ -1385,7 +1366,7 @@ function renderEmployeeDetails(data, employeeId, activeTab) {
       </div>
     </div>
     <div class="tabs detail-tabs">
-      ${tabs.map((tab) => `<button class="tab ${activeTab === tab ? "active" : ""}" data-route="/permissions/employees/${employee.id}" data-query-tab="${tab}">${{ profile: "Profile", roles: "Assigned Roles", effective: "Effective Access", explanation: "Access Explanation", audit: "Audit History" }[tab]}</button>`).join("")}
+      ${tabs.map((tab) => `<button class="tab ${activeTab === tab ? "active" : ""}" data-route="/directory/${employee.id}" data-query-tab="${tab}">${{ profile: "Profile", roles: "Assigned Roles", effective: "Effective Access", explanation: "Access Explanation", audit: "Audit History" }[tab]}</button>`).join("")}
     </div>
     ${activeTab === "profile" ? renderEmployeeProfile(employee) : ""}
     ${activeTab === "roles" ? renderEmployeeRoles(data, employee) : ""}
@@ -1728,13 +1709,9 @@ function renderModal(data) {
   if (stateful.confirm) return renderConfirmModal();
   if (stateful.modal === "connection") return renderConnectionWizard(data);
   if (stateful.modal === "role") return renderRoleWizard(data);
-  if (stateful.modal === "iam") return renderIamWizard(data);
-  if (stateful.modal === "import") return renderImportModal(data);
   if (stateful.modal === "agent") return renderAgentWizard(data);
   if (stateful.modal === "access-simulator") return `<div class="modal-backdrop"><div class="modal xl">${modalHeader("Access Simulator")}${renderAccessSimulator(data)}<div class="modal-actions">${actionButton("Close", "close-modal", "secondary")}</div></div></div>`;
-  if (stateful.modal === "add-employees") return renderAddEmployeesModal(data);
-  if (stateful.modal === "add-role") return renderAddRoleToEmployeeModal(data);
-  if (stateful.modal === "rule") return renderRuleModal(data);
+  if (stateful.modal === "group") return renderGroupModal(data);
   return "";
 }
 
@@ -1902,57 +1879,31 @@ function emptyRoleDraft(data) {
     code: "",
     description: "",
     owner: data.currentUser.name,
-    origin: "Created manually",
     status: "Active",
-    currentCorporate: data.corporate.name,
-    assignmentMethods: ["Add Employees Manually"],
-    employeeIds: [],
-    iamGroupId: "",
-    ruleRows: [{ field: "Department", operator: "Equals", value: "Finance", joiner: "AND" }],
-    csvText: "",
-    csvRows: [],
-    previewEmployeeIds: [],
+    groupIds: [],
     connectionIds: [],
     resourceIdsByConnection: {},
     matrixByConnection: {},
     fieldRestrictions: {},
-    conditions: {
-      exportAllowed: true,
-      externalSharingAllowed: false,
-      maxRecords: 500,
-      maxExportSize: "25 MB",
-      approvalRequired: false,
-      approvalAmount: "",
-      effectiveDate: "2026-07-27",
-      expiryDate: "",
-      location: "Any",
-      employmentStatus: "Active",
-      managedDeviceRequired: false,
-      temporaryAccess: false,
-      reasonRequired: false
-    },
-    provisionToSource: {}
+    conditions: {}
   };
 }
 
 function roleDraftFromRole(data, role) {
-  const draft = emptyRoleDraft(data);
   return {
-    ...draft,
     id: role.id,
     name: role.name,
     code: role.code,
     description: role.description,
     owner: role.owner,
-    origin: role.origin,
     status: role.status,
-    employeeIds: [...role.assignedEmployeeIds],
+    origin: role.origin,
+    groupIds: [...(role.groupIds || [])],
     connectionIds: role.permissions.map((permission) => permission.connectionId),
-    resourceIdsByConnection: Object.fromEntries(role.permissions.map((permission) => [permission.connectionId, permission.resourceScope.mode === "all" ? ["__all__"] : permission.resourceScope.resourceIds])),
-    matrixByConnection: Object.fromEntries(role.permissions.map((permission) => [permission.connectionId, permission.matrix])),
-    fieldRestrictions: role.permissions[0]?.fieldRestrictions || {},
-    conditions: { ...draft.conditions, ...(role.permissions[0]?.conditions || {}) },
-    provisionToSource: Object.fromEntries(role.permissions.map((permission) => [permission.connectionId, permission.provisionToSource]))
+    resourceIdsByConnection: Object.fromEntries(role.permissions.map((permission) => [permission.connectionId, [...(permission.resourceScope?.resourceIds || [])]])),
+    matrixByConnection: Object.fromEntries(role.permissions.map((permission) => [permission.connectionId, structuredClone(permission.matrix)])),
+    fieldRestrictions: { ...(role.permissions[0]?.fieldRestrictions || {}) },
+    conditions: { ...(role.permissions[0]?.conditions || {}) }
   };
 }
 
@@ -1961,9 +1912,57 @@ function ensureRoleWizard(data) {
   return stateful.roleWizard;
 }
 
+function ensureGroupModal() {
+  if (!stateful.groupModal) stateful.groupModal = { name: "", rule: "Department = Finance", description: "" };
+  return stateful.groupModal;
+}
+
+function renderGroupModal(data) {
+  const draft = ensureGroupModal();
+  const [field, value] = String(draft.rule || "").split("=").map((part) => part.trim());
+  const valuesFor = {
+    Designation: [...new Set(data.employees.map((employee) => employee.designation))],
+    Department: [...new Set(data.employees.map((employee) => employee.department))],
+    "Employment Type": [...new Set(data.employees.map((employee) => employee.employmentType))],
+    "Employment Status": [...new Set(data.employees.map((employee) => employee.employmentStatus))],
+    Grade: [...new Set(data.employees.map((employee) => employee.grade))],
+    Location: [...new Set(data.employees.map((employee) => employee.location))]
+  };
+  const preview = groupMembers(data, { rule: draft.rule, extraMemberIds: [] });
+  return `
+    <div class="modal-backdrop">
+      <div class="modal" role="dialog" aria-modal="true">
+        ${modalHeader(draft.id ? "Edit Group" : "Create Group")}
+        <div class="wizard-body">
+          <div class="form-grid two">
+            ${fieldInput("group.name", "Group name", draft.name)}
+            ${fieldInput("group.description", "Description", draft.description)}
+          </div>
+          <div class="subsection">
+            <h3>Membership rule ${tip("One attribute, matched against each synced employee record. Anyone matching joins the group on the next sync — that is what makes joiner provisioning automatic.")}</h3>
+            <div class="form-grid two">
+              <label class="select-label"><span>Attribute</span>
+                <select data-action="group-rule-field">${GROUP_RULE_FIELDS.map((item) => `<option ${item === field ? "selected" : ""}>${item}</option>`).join("")}</select>
+              </label>
+              <label class="select-label"><span>Equals</span>
+                <select data-action="group-rule-value">${(valuesFor[field] || []).map((item) => `<option ${item === value ? "selected" : ""}>${esc(item)}</option>`).join("")}</select>
+              </label>
+            </div>
+            <p class="muted">Matches <strong>${preview.length}</strong> ${preview.length === 1 ? "person" : "people"} today: ${esc(preview.map((employee) => employee.name).join(", ") || "nobody")}</p>
+          </div>
+        </div>
+        <div class="modal-actions">
+          ${actionButton("Cancel", "close-modal", "secondary")}
+          ${actionButton(draft.id ? "Save group" : "Create group", "save-group", "primary")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderRoleWizard(data) {
   const wizard = ensureRoleWizard(data);
-  const steps = ["Role Details", "Membership", "Tools and Scope", "Permissions", "Field Obligations", "Review and Publish"];
+  const steps = ["Role & Groups", "Permissions", "Review"];
   return `
     <div class="modal-backdrop">
       <div class="modal xl" role="dialog" aria-modal="true">
@@ -1971,16 +1970,13 @@ function renderRoleWizard(data) {
         ${stepper(steps, wizard.step)}
         <div class="wizard-body">
           ${wizard.step === 1 ? renderRoleStepDetails(data, wizard.draft) : ""}
-          ${wizard.step === 2 ? renderRoleStepAssignments(data, wizard.draft) : ""}
-          ${wizard.step === 3 ? renderRoleStepTools(data, wizard.draft) : ""}
-          ${wizard.step === 4 ? renderRoleStepPermissions(data, wizard.draft) : ""}
-          ${wizard.step === 5 ? renderRoleStepRestrictions(data, wizard.draft) : ""}
-          ${wizard.step === 6 ? renderRoleStepReview(data, wizard.draft) : ""}
+          ${wizard.step === 2 ? renderRoleStepPermissionsCombined(data, wizard.draft) : ""}
+          ${wizard.step === 3 ? renderRoleStepReview(data, wizard.draft) : ""}
         </div>
         <div class="modal-actions">
           ${wizard.step > 1 ? actionButton("Back", "role-back", "secondary") : ""}
           ${actionButton("Cancel", "close-modal", "secondary")}
-          ${wizard.step === 6 ? actionButton("Save as Draft", "save-role-draft", "secondary") : ""}
+          ${wizard.step === 3 ? actionButton("Save as Draft", "save-role-draft", "secondary") : ""}
           ${wizard.step < steps.length ? actionButton("Next", "role-next", "primary") : actionButton("Publish Role", "publish-role", "primary")}
         </div>
       </div>
@@ -1988,99 +1984,39 @@ function renderRoleWizard(data) {
   `;
 }
 
+/** Step 2 folds tool scope, the action matrix and field obligations into one page. */
+function renderRoleStepPermissionsCombined(data, draft) {
+  return `
+    ${renderRoleStepTools(data, draft)}
+    ${draft.connectionIds.length ? renderRoleStepPermissions(data, draft) : ""}
+    ${draft.connectionIds.length ? renderRoleStepRestrictions(data, draft) : ""}
+  `;
+}
+
 function renderRoleStepDetails(data, draft) {
+  const groups = data.groups || [];
+  const reach = groups.filter((group) => draft.groupIds.includes(group.id)).flatMap((group) => groupMembers(data, group));
+  const reachCount = new Set(reach.map((employee) => employee.id)).size;
   return `
     <div class="form-grid two">
-      ${fieldInput("role.name", "Role Name", draft.name)}
-      ${fieldInput("role.code", "Role Code", draft.code)}
+      ${fieldInput("role.name", "Role name", draft.name)}
+      ${fieldInput("role.code", "Role code", draft.code)}
       ${fieldInput("role.description", "Description", draft.description)}
-      ${fieldInput("role.owner", "Role Owner", draft.owner)}
       ${fieldSelect("role.status", "Status", ["Active", "Draft", "Disabled"], draft.status)}
-      <label class="field"><span>Current Corporate</span><input value="${esc(data.corporate.name)}" readonly /></label>
+    </div>
+    <div class="subsection">
+      <h3>Which groups get this role? ${tip("Groups are the only way a role reaches anyone. Each group already carries a rule, so whoever matches that rule on the next sync inherits this role automatically — including new joiners.")}</h3>
+      <div class="check-grid compact">
+        ${groups.map((group) => `
+          <label class="check-card">
+            <input type="checkbox" data-action="role-group" value="${group.id}" ${draft.groupIds.includes(group.id) ? "checked" : ""} />
+            <span>${esc(group.name)}<small>${esc(group.rule)} · ${groupMembers(data, group).length} people</small></span>
+          </label>
+        `).join("") || `<p class="muted">No groups yet. Create one first.</p>`}
+      </div>
+      ${draft.groupIds.length ? `<p class="muted">This role will reach <strong>${reachCount}</strong> ${reachCount === 1 ? "person" : "people"} today, and anyone who matches those rules in future.</p>` : `<p class="muted">Pick at least one group, or the role reaches nobody.</p>`}
     </div>
   `;
-}
-
-function renderRoleStepAssignments(data, draft) {
-  const methods = ["IAM Group", "HRMS Attribute Rule", "Add Employees Manually", "Upload CSV"];
-  const matched = previewEmployees(data, draft);
-  draft.previewEmployeeIds = matched.map((employee) => employee.id);
-  return `
-    <p class="muted step-note">How do people end up in this role? Pick one or more. This decides <strong>membership only</strong> — it does not change what the role may do, and it is separate from where the role definition came from.</p>
-    <div class="check-grid compact">
-      ${methods.map((method) => `<label class="check-card"><input type="checkbox" data-action="role-assignment-method" value="${method}" ${draft.assignmentMethods.includes(method) ? "checked" : ""} /><span>${method}</span></label>`).join("")}
-    </div>
-    ${draft.assignmentMethods.includes("IAM Group") ? `
-      <div class="subsection">
-        <h3>IAM Group → HyperContext Role</h3>
-        ${fieldSelect("role.iamGroupId", "IAM Group", data.iamGroups.map((group) => [group.id, `${group.name} (${group.members} members)`]), draft.iamGroupId)}
-      </div>
-    ` : ""}
-    ${draft.assignmentMethods.includes("HRMS Attribute Rule") ? `
-      <div class="subsection">
-        <h3>HRMS Attribute Rule</h3>
-        <div class="rule-builder">
-          ${draft.ruleRows.map((row, index) => `
-            <div class="rule-row">
-              ${index > 0 ? fieldSelect(`role.ruleRows.${index}.joiner`, "Joiner", ["AND", "OR"], row.joiner) : "<span></span>"}
-              ${fieldSelect(`role.ruleRows.${index}.field`, "Field", ["Department", "Designation", "Grade", "Location", "Employment Type", "Employment Status", "Manager", "Legal Entity"], row.field)}
-              ${fieldSelect(`role.ruleRows.${index}.operator`, "Operator", ["Equals", "Does not equal", "Contains", "Is one of", "Is not one of", "Greater than or equal", "Less than or equal"], row.operator)}
-              ${fieldInput(`role.ruleRows.${index}.value`, "Value", row.value)}
-            </div>
-          `).join("")}
-        </div>
-        <div class="modal-actions inline">${actionButton("Add Rule Condition", "add-rule-condition", "secondary")} ${actionButton("Preview Matching Employees", "preview-role-employees", "primary")}</div>
-        <p class="muted">${matched.length} matching employee(s)</p>
-        ${employeePreviewTable(matched.slice(0, 4))}
-      </div>
-    ` : ""}
-    ${draft.assignmentMethods.includes("Add Employees Manually") ? `
-      <div class="subsection">
-        <h3>Manual Employee Selection</h3>
-        <div class="filters mini">
-          <input data-filter="employees.q" placeholder="Search employees" />
-          ${selectInput("employees.department", "Department", ["", ...new Set(data.employees.map((employee) => employee.department))], stateful.filters.employees.department)}
-          ${selectInput("employees.designation", "Designation", ["", ...new Set(data.employees.map((employee) => employee.designation))], stateful.filters.employees.designation)}
-          ${selectInput("employees.status", "Employment status", ["", "Active", "Inactive", "Terminated"], "")}
-        </div>
-        <div class="employee-picker">
-          ${data.employees.map((employee) => `<label><input type="checkbox" data-action="role-employee" value="${employee.id}" ${draft.employeeIds.includes(employee.id) ? "checked" : ""} /><span>${esc(employee.name)} · ${esc(employee.employeeId)} · ${esc(employee.department)}</span></label>`).join("")}
-        </div>
-      </div>
-    ` : ""}
-    ${draft.assignmentMethods.includes("Upload CSV") ? `
-      <div class="subsection">
-        <h3>CSV Assignment</h3>
-        <div class="drop-zone">
-          <input type="file" accept=".csv" data-action="role-csv-file" />
-          <span>Drop or choose a CSV with employee_id, employee_name, work_email, role_code, effective_from, effective_until.</span>
-        </div>
-        <textarea data-bind="role.csvText" placeholder="employee_id,employee_name,work_email,role_code,effective_from,effective_until">${esc(draft.csvText)}</textarea>
-        <div class="modal-actions inline">${actionButton("Parse CSV", "parse-role-csv", "secondary")}</div>
-        ${draft.csvRows.length ? csvSummary(draft.csvRows) : ""}
-      </div>
-    ` : ""}
-  `;
-}
-
-function employeePreviewTable(employees) {
-  if (!employees.length) return `<div class="empty-state small">No employees match yet.</div>`;
-  return `<div class="table-wrap tight"><table><thead><tr><th>Employee</th><th>Department</th><th>Grade</th><th>Status</th></tr></thead><tbody>${employees.map((employee) => `<tr><td>${esc(employee.name)}</td><td>${esc(employee.department)}</td><td>${esc(employee.grade)}</td><td>${esc(employee.employmentStatus)}</td></tr>`).join("")}</tbody></table></div>`;
-}
-
-function previewEmployees(data, draft) {
-  if (!draft.assignmentMethods.includes("HRMS Attribute Rule")) return [];
-  return data.employees.filter((employee) => draft.ruleRows.every((row) => {
-    const sourceValue = String(employee[toCamel(row.field)] || "");
-    if (row.operator === "Equals") return sourceValue === row.value;
-    if (row.operator === "Does not equal") return sourceValue !== row.value;
-    if (row.operator === "Contains") return sourceValue.toLowerCase().includes(row.value.toLowerCase());
-    if (row.operator === "Is one of") return row.value.split(",").map((value) => value.trim()).includes(sourceValue);
-    if (row.operator === "Is not one of") return !row.value.split(",").map((value) => value.trim()).includes(sourceValue);
-    if (row.operator === "Greater than or equal") return sourceValue >= row.value;
-    if (row.operator === "Less than or equal") return sourceValue <= row.value;
-    return false;
-  }));
 }
 
 function toCamel(label) {
@@ -2215,133 +2151,21 @@ function renderRoleStepReview(data, draft) {
   const selectedConnections = draft.connectionIds.map((connectionId) => byId(data.connections, connectionId)).filter(Boolean);
   const allActions = selectedConnections.flatMap((connection) => Object.values(draft.matrixByConnection[connection.id] || {}).flatMap((matrix) => Object.entries(matrix).filter(([, effect]) => effect === "allow").map(([name]) => name)));
   const denies = selectedConnections.flatMap((connection) => Object.values(draft.matrixByConnection[connection.id] || {}).flatMap((matrix) => Object.entries(matrix).filter(([, effect]) => effect === "deny").map(([name]) => name)));
-  const sourceSupported = selectedConnections.filter((connection) => getToolCapability(connection.sourceTool).supportsProvisioning).length;
+  const chosenGroups = (data.groups || []).filter((group) => draft.groupIds.includes(group.id));
+  const reach = new Set(chosenGroups.flatMap((group) => groupMembers(data, group)).map((employee) => employee.id));
   return `
     <div class="review-grid">
-      ${definition("Role details", `${draft.name || "Untitled"} (${draft.code || "No code"})`)}
-      ${definition("Membership", membershipFromMethods(draft.assignmentMethods).join(", "))}
-      ${definition("Origin", "Created manually")}
-      ${definition("Matching employees", new Set([...draft.employeeIds, ...draft.previewEmployeeIds, ...draft.csvRows.filter((row) => row.valid).map((row) => row.employeeId)]).size)}
-      ${definition("Selected categories", [...new Set(selectedConnections.map((connection) => connection.category))].join(", ") || "None")}
-      ${definition("Selected tools", [...new Set(selectedConnections.map((connection) => connection.sourceTool))].join(", ") || "None")}
-      ${definition("Selected connections", selectedConnections.map((connection) => connection.connectionName).join(", ") || "None")}
-      ${definition("Selected resources", Object.values(draft.resourceIdsByConnection).flat().length)}
+      ${definition("Role", `${draft.name || "Untitled"} (${draft.code || "no code"})`)}
+      ${definition("Groups", chosenGroups.map((group) => group.name).join(", ") || "None — this role reaches nobody")}
+      ${definition("People reached today", reach.size)}
+      ${definition("Tools", [...new Set(selectedConnections.map((connection) => connection.sourceTool))].join(", ") || "None")}
+      ${definition("Resources in scope", Object.values(draft.resourceIdsByConnection).flat().length)}
       ${definition("Allowed actions", allActions.length)}
       ${definition("Explicit denies", denies.length)}
-      ${definition("Restricted fields", Object.keys(draft.fieldRestrictions).length)}
-      ${definition("Approval requirements", draft.conditions.approvalRequired ? "Required" : "Not required")}
-      ${definition("Source-provisioning support", `${sourceSupported} connection(s)`)}
-      ${definition("Unsupported actions", "Disabled in the generated matrix")}
+      ${definition("Field obligations", Object.keys(draft.fieldRestrictions).length)}
     </div>
-    <div class="impact-summary">
-      ${miniMetric("Employees gaining access", new Set([...draft.employeeIds, ...draft.previewEmployeeIds]).size)}
-      ${miniMetric("Employees losing access", draft.id ? "0 in this edit" : "0")}
-      ${miniMetric("Permission conflicts detected", denies.length ? `${denies.length} explicit deny entries` : "None")}
-      ${miniMetric("Manual action required", `${selectedConnections.length - sourceSupported} connection(s)`)}
-    </div>
-  `;
-}
-
-function ensureIamWizard() {
-  if (!stateful.iamWizard) {
-    stateful.iamWizard = { step: 1, ...iamDefaults("Okta", store.getState()) };
-  }
-  return stateful.iamWizard;
-}
-
-function iamDefaults(provider, data) {
-  const defaults = {
-    Okta: {
-      displayName: "Okta Directory",
-      tenantDomain: "tartanhq.okta.com",
-      apiBaseUrl: "https://tartanhq.okta.com",
-      credentialType: "OAuth Client Credentials",
-      scimBaseUrl: "https://tartanhq.okta.com/scim/v2"
-    },
-    "Microsoft Entra ID (Azure AD)": {
-      displayName: "Microsoft Entra Directory",
-      tenantDomain: "tartanhq.onmicrosoft.com",
-      apiBaseUrl: "https://graph.microsoft.com/v1.0",
-      credentialType: "OAuth Client Credentials",
-      scimBaseUrl: "https://graph.microsoft.com/v1.0"
-    },
-    "Google Workspace": {
-      displayName: "Google Workspace Directory",
-      tenantDomain: "tartanhq.com",
-      apiBaseUrl: "https://admin.googleapis.com/admin/directory/v1",
-      credentialType: "OAuth Client Credentials",
-      scimBaseUrl: ""
-    },
-    "Custom OIDC / SCIM": {
-      displayName: "Custom OIDC / SCIM Directory",
-      tenantDomain: "identity.tartanhq.example",
-      apiBaseUrl: "https://identity.tartanhq.example",
-      credentialType: "SCIM Bearer Token",
-      scimBaseUrl: "https://identity.tartanhq.example/scim/v2"
-    }
-  };
-  return {
-    provider,
-    owner: data.currentUser.name,
-    environment: "Production",
-    clientId: "",
-    clientSecret: "",
-    syncUsers: true,
-    syncGroups: true,
-    ...(defaults[provider] || defaults.Okta)
-  };
-}
-
-function renderIamWizard(data) {
-  const wizard = ensureIamWizard();
-  const steps = ["Select Provider", "Connection Details", "API Credentials", "Review and Connect"];
-  const providers = ["Okta", "Microsoft Entra ID (Azure AD)", "Google Workspace", "Custom OIDC / SCIM"];
-  return `
-    <div class="modal-backdrop">
-      <div class="modal lg">
-        ${modalHeader("Connect IAM")}
-        ${stepper(steps, wizard.step)}
-        <div class="wizard-body">
-          ${wizard.step === 1 ? `<div class="option-grid">${providers.map((provider) => optionCard(provider, "Connect identities and groups from this IAM provider.", wizard.provider === provider, "iam-provider", provider)).join("")}</div><div class="info-banner">IAM provides authentication, identities and group memberships. Resource-level access is still controlled by source permissions and HyperContext policies.</div>` : ""}
-          ${wizard.step === 2 ? `<div class="form-grid two">${fieldInput("iam.displayName", "Connection name", wizard.displayName || `${wizard.provider} Directory`)}${fieldInput("iam.tenantDomain", "Tenant domain", wizard.tenantDomain)}${fieldInput("iam.owner", "Connection owner", wizard.owner || data.currentUser.name)}${fieldSelect("iam.environment", "Environment", ["Production", "Sandbox"], wizard.environment || "Production")}</div>` : ""}
-          ${wizard.step === 3 ? `<div class="form-grid two">${fieldInput("iam.apiBaseUrl", "API base URL", wizard.apiBaseUrl)}${fieldSelect("iam.credentialType", "Credential type", ["OAuth Client Credentials", "API Token", "OIDC Client Secret", "SCIM Bearer Token"], wizard.credentialType)}${fieldInput("iam.clientId", "Client ID", wizard.clientId)}${fieldInput("iam.clientSecret", "Client secret / API token", wizard.clientSecret, "password")}${fieldInput("iam.scimBaseUrl", "SCIM base URL", wizard.scimBaseUrl)}<label class="field"><span>Credential storage</span><input readonly value="Prototype only. Secret is masked and not used for real API calls." /></label></div>` : ""}
-          ${wizard.step === 4 ? `<div class="review-grid">${definition("Provider", wizard.provider)}${definition("Connection name", wizard.displayName || `${wizard.provider} Directory`)}${definition("Tenant domain", wizard.tenantDomain || "Not set")}${definition("API base URL", wizard.apiBaseUrl || "Not set")}${definition("Credential type", wizard.credentialType)}${definition("Client ID", wizard.clientId || "Not set")}${definition("Secret configured", wizard.clientSecret ? "Yes, masked" : "No")}${definition("Users and groups", "Will sync after connection")}${definition("Last sync", "Will run immediately")}</div>` : ""}
-        </div>
-        <div class="modal-actions">
-          ${wizard.step > 1 ? actionButton("Back", "iam-back", "secondary") : ""}
-          ${actionButton("Cancel", "close-modal", "secondary")}
-          ${wizard.step < steps.length ? actionButton("Next", "iam-next", "primary") : actionButton("Review and Connect", "connect-iam", "primary")}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function ensureImportModal() {
-  if (!stateful.importModal) stateful.importModal = { importType: "Roles and Employee Assignments", csvText: "", rows: [], mapped: false };
-  return stateful.importModal;
-}
-
-function renderImportModal() {
-  const modal = ensureImportModal();
-  const permissionType = modal.importType === "Role Permission Mapping";
-  return `
-    <div class="modal-backdrop">
-      <div class="modal lg">
-        ${modalHeader("Import Role Mapping")}
-        <div class="form-grid one">
-          ${fieldSelect("import.importType", "Import Type", ["Roles and Employee Assignments", "Role Permission Mapping"], modal.importType)}
-          <div class="drop-zone"><input type="file" accept=".csv" data-action="import-csv-file" /><span>Drop or choose a CSV file.</span></div>
-          <button class="btn secondary slim" data-action="download-template">Download Template</button>
-          <textarea data-bind="import.csvText" placeholder="${permissionType ? "role_code,category,tool,connection_id,resource_type,resource_id,action,effect,field_restrictions,effective_from,effective_until" : "role_code,role_name,employee_id,employee_name,work_email,effective_from,effective_until"}">${esc(modal.csvText)}</textarea>
-          <div class="modal-actions inline">${actionButton("Parse CSV", "parse-import-csv", "secondary")} ${actionButton("Map Columns", "map-import-columns", "secondary")}</div>
-          ${modal.rows.length ? csvSummary(modal.rows) : ""}
-        </div>
-        <div class="modal-actions">
-          ${actionButton("Cancel", "close-modal", "secondary")}
-          ${actionButton("Confirm Import", "confirm-import", "primary", modal.rows.length ? "" : "disabled")}
-        </div>
-      </div>
+    <div class="info-banner">
+      <span>Everything above is still capped by what each tool already grants these people. The role can narrow that, never widen it.</span>
     </div>
   `;
 }
@@ -2399,56 +2223,6 @@ function renderAgentWizard(data) {
   `;
 }
 
-function renderAddEmployeesModal(data) {
-  const role = byId(data.roles, stateful.addEmployeesRoleId);
-  return `
-    <div class="modal-backdrop">
-      <div class="modal lg">
-        ${modalHeader(`Add Employees to ${role?.name || "Role"}`)}
-        <div class="employee-picker modal-picker">${data.employees.map((employee) => `<label><input type="checkbox" data-action="modal-employee-select" value="${employee.id}" /><span>${esc(employee.name)} · ${esc(employee.employeeId)} · ${esc(employee.department)}</span></label>`).join("")}</div>
-        <div class="modal-actions">${actionButton("Cancel", "close-modal", "secondary")}${actionButton("Add Employees", "confirm-add-employees", "primary")}</div>
-      </div>
-    </div>
-  `;
-}
-
-function renderAddRoleToEmployeeModal(data) {
-  const employee = byId(data.employees, stateful.addRoleEmployeeId);
-  return `
-    <div class="modal-backdrop">
-      <div class="modal sm">
-        ${modalHeader(`Add Role to ${employee?.name || "Employee"}`)}
-        ${fieldSelect("addRole.roleId", "Role", data.roles.map((role) => [role.id, role.name]), data.roles[0]?.id)}
-        <div class="modal-actions">${actionButton("Cancel", "close-modal", "secondary")}${actionButton("Add Role", "confirm-add-role-to-employee", "primary")}</div>
-      </div>
-    </div>
-  `;
-}
-
-function renderRuleModal(data) {
-  if (!stateful.ruleModal) stateful.ruleModal = { name: "", roleId: data.roles[0]?.id, source: "HRMS", conditions: "Department = Finance AND Employment Status = Active", effectiveDate: "2026-07-27", expiryDate: "", priority: 50, status: "Active", lifecycleEvents: ["Joiner", "Mover"] };
-  const rule = stateful.ruleModal;
-  return `
-    <div class="modal-backdrop">
-      <div class="modal lg">
-        ${modalHeader("Create Assignment Rule")}
-        <div class="form-grid two">
-          ${fieldInput("rule.name", "Rule name", rule.name)}
-          ${fieldSelect("rule.roleId", "Assign role", data.roles.map((roleItem) => [roleItem.id, roleItem.name]), rule.roleId)}
-          ${fieldSelect("rule.source", "Source", ["HRMS", "IAM", "Manual", "CSV Import"], rule.source)}
-          ${fieldInput("rule.conditions", "Conditions", rule.conditions)}
-          ${fieldInput("rule.effectiveDate", "Effective date", rule.effectiveDate, "date")}
-          ${fieldInput("rule.expiryDate", "Expiry date", rule.expiryDate, "date")}
-          ${fieldInput("rule.priority", "Priority", rule.priority, "number")}
-          ${fieldSelect("rule.status", "Status", ["Active", "Draft", "Disabled"], rule.status)}
-        </div>
-        <div class="check-grid compact">${["Joiner", "Mover", "Leaver"].map((event) => `<label class="check-card"><input type="checkbox" data-action="rule-event" value="${event}" ${rule.lifecycleEvents.includes(event) ? "checked" : ""}/><span>${event}</span></label>`).join("")}</div>
-        <div class="modal-actions">${actionButton("Cancel", "close-modal", "secondary")}${actionButton("Create Rule", "create-rule", "primary")}</div>
-      </div>
-    </div>
-  `;
-}
-
 function bindValue(path, value) {
   const [scope, ...rest] = path.split(".");
   const key = rest.join(".");
@@ -2464,36 +2238,13 @@ function bindValue(path, value) {
   };
   if (scope === "connection") write(ensureConnectionWizard(store.getState()).draft, key, value);
   if (scope === "role") write(ensureRoleWizard(store.getState()).draft, key, value);
-  if (scope === "iam") write(ensureIamWizard(), key, value);
-  if (scope === "import") write(ensureImportModal(), key, value);
+  if (scope === "group") write(ensureGroupModal(), key, value);
   if (scope === "agent") write(ensureAgentWizard().draft, key, value);
   if (scope === "simulator") write(stateful.simulator, key, value);
   if (scope === "lifecycle") write(stateful.lifecycle, key, value);
-  if (scope === "rule") write(stateful.ruleModal ||= {}, key, value);
   if (scope === "context") write(stateful.context, key, value);
   if (scope === "filter") write(stateful.filters, key, value);
   if (scope === "addRole") stateful.selectedRoleForEmployee = value;
-}
-
-function parseCsv(text, data, type = "assignment") {
-  const lines = text.trim().split(/\r?\n/).filter(Boolean);
-  if (!lines.length) return [];
-  const headers = lines[0].split(",").map((item) => item.trim());
-  const seen = new Set();
-  return lines.slice(1).map((line, index) => {
-    const values = line.split(",").map((item) => item.trim());
-    const row = Object.fromEntries(headers.map((header, headerIndex) => [header, values[headerIndex] || ""]));
-    const employee = data.employees.find((item) => item.employeeId === row.employee_id || item.workEmail === row.work_email);
-    const duplicateKey = type === "permission" ? `${row.role_code}|${row.connection_id}|${row.resource_id}|${row.action}` : `${row.role_code}|${row.employee_id || row.work_email}`;
-    const duplicate = seen.has(duplicateKey);
-    seen.add(duplicateKey);
-    const errors = [];
-    if (!row.role_code) errors.push("Missing role_code");
-    if (type !== "permission" && !employee) errors.push("No employee matched employee_id or work_email");
-    if (type === "permission" && (!row.connection_id || !row.action || !row.effect)) errors.push("Missing permission columns");
-    if (duplicate) errors.push("Duplicate row");
-    return { ...row, rowNumber: index + 2, employeeId: employee?.id || "", unmatched: !employee && type !== "permission", duplicate, errors, valid: errors.length === 0 };
-  });
 }
 
 function nextEffect(value) {
@@ -2555,21 +2306,8 @@ document.addEventListener("change", (event) => {
     handleAction(target);
     return;
   }
-  if (target.matches("[data-action='role-csv-file']") || target.matches("[data-action='import-csv-file']")) readCsvFile(target);
   render();
 });
-
-function readCsvFile(input) {
-  const file = input.files?.[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    if (input.dataset.action === "role-csv-file") ensureRoleWizard(store.getState()).draft.csvText = String(reader.result);
-    if (input.dataset.action === "import-csv-file") ensureImportModal().csvText = String(reader.result);
-    render();
-  };
-  reader.readAsText(file);
-}
 
 function handleAction(el) {
   const action = el.dataset.action;
@@ -2630,24 +2368,38 @@ function handleAction(el) {
     return render();
   }
   if (action === "role-next") return nextRoleStep(data);
-  if (action === "role-assignment-method") return toggleArray(ensureRoleWizard(data).draft.assignmentMethods, el.value, el.checked, true);
-  if (action === "role-employee") return toggleArray(ensureRoleWizard(data).draft.employeeIds, el.value, el.checked);
-  if (action === "add-rule-condition") {
-    ensureRoleWizard(data).draft.ruleRows.push({ joiner: "AND", field: "Department", operator: "Equals", value: "" });
+  if (action === "role-group") return toggleArray(ensureRoleWizard(data).draft.groupIds, el.value, el.checked, true);
+  if (action === "open-group-modal") {
+    stateful.groupModal = null;
+    stateful.modal = "group";
     return render();
   }
-  if (action === "preview-role-employees") {
-    const wizard = ensureRoleWizard(data);
-    wizard.draft.previewEmployeeIds = previewEmployees(data, wizard.draft).map((employee) => employee.id);
-    showToast(`${wizard.draft.previewEmployeeIds.length} matching employees found`);
+  if (action === "edit-group") {
+    const group = (data.groups || []).find((item) => item.id === el.dataset.id);
+    stateful.groupModal = { ...group };
+    stateful.modal = "group";
     return render();
   }
-  if (action === "parse-role-csv") {
-    const wizard = ensureRoleWizard(data);
-    wizard.draft.csvRows = parseCsv(wizard.draft.csvText, data, "assignment");
-    wizard.draft.employeeIds = [...new Set([...wizard.draft.employeeIds, ...wizard.draft.csvRows.filter((row) => row.valid).map((row) => row.employeeId)])];
+  if (action === "group-rule-field") {
+    const draft = ensureGroupModal();
+    const firstValue = {
+      Designation: data.employees[0]?.designation,
+      Department: data.employees[0]?.department,
+      "Employment Type": data.employees[0]?.employmentType,
+      "Employment Status": data.employees[0]?.employmentStatus,
+      Grade: data.employees[0]?.grade,
+      Location: data.employees[0]?.location
+    }[el.value];
+    draft.rule = `${el.value} = ${firstValue}`;
     return render();
   }
+  if (action === "group-rule-value") {
+    const draft = ensureGroupModal();
+    draft.rule = `${draft.rule.split("=")[0].trim()} = ${el.value}`;
+    return render();
+  }
+  if (action === "save-group") return saveGroup(data);
+  if (action === "delete-group") return openConfirm("Delete group?", "Roles attached to this group would reach nobody. Detach them first.", "delete-group", { id: el.dataset.id });
   if (action === "role-connection") return toggleRoleConnection(data, el.value, el.checked);
   if (action === "role-resource") return toggleRoleResource(el.dataset.connectionId, el.value, el.checked);
   if (action === "cycle-draft-permission") return cycleDraftPermission(el.dataset.connectionId, el.dataset.resourceType, el.dataset.permission);
@@ -2662,80 +2414,11 @@ function handleAction(el) {
   if (action === "field-restriction") return updateGrantFieldRestriction(el.dataset.roleId, el.dataset.grantId, el.dataset.field, el.value);
   if (action === "source-status") return updateGrantStatus(el.dataset.roleId, el.dataset.grantId, el.value);
   if (action === "toggle-source-provision") return toggleSourceProvision(el.dataset.roleId, el.dataset.grantId, el.checked);
-  if (action === "open-add-employees") {
-    stateful.addEmployeesRoleId = el.dataset.roleId;
-    stateful.selectedModalEmployeeIds = [];
-    stateful.modal = "add-employees";
-    return render();
-  }
-  if (action === "modal-employee-select") return toggleArray(stateful.selectedModalEmployeeIds, el.value, el.checked);
-  if (action === "confirm-add-employees") {
-    store.update((draft) => addEmployeesToRole(draft, stateful.addEmployeesRoleId, stateful.selectedModalEmployeeIds || []));
-    closeModal();
-    return showToast("Employees added to role");
-  }
-  if (action === "remove-employee-role") return removeEmployeeRole(el.dataset.roleId, el.dataset.employeeId);
-  if (action === "temp-employee-role") return addTempAccess(el.dataset.roleId, el.dataset.employeeId);
-  if (action === "open-add-role-to-employee") {
-    stateful.addRoleEmployeeId = el.dataset.employeeId;
-    stateful.modal = "add-role";
-    return render();
-  }
-  if (action === "confirm-add-role-to-employee") return addRoleToEmployee();
-  if (action === "add-temp-access") return addEmployeeTempAccess(el.dataset.employeeId);
-  if (action === "add-explicit-restriction") return addExplicitRestriction(el.dataset.employeeId);
-  if (action === "open-rule-modal") {
-    stateful.ruleModal = null;
-    stateful.modal = "rule";
-    return render();
-  }
-  if (action === "rule-event") return toggleArray(stateful.ruleModal.lifecycleEvents, el.value, el.checked);
-  if (action === "create-rule") return createRule(data);
-  if (action === "duplicate-rule" || action === "toggle-rule" || action === "delete-rule") return mutateRule(action, el.dataset.id);
   if (action === "run-lifecycle-simulation") {
     stateful.lifecycle.result = simulateLifecycleEvent(data, stateful.lifecycle);
     return render();
   }
   if (action === "apply-lifecycle-simulation") return applyLifecycleSimulation();
-  if (action === "open-iam-wizard") {
-    stateful.iamWizard = null;
-    stateful.modal = "iam";
-    return render();
-  }
-  if (action === "iam-provider") {
-    const wizard = ensureIamWizard();
-    Object.assign(wizard, iamDefaults(el.dataset.value, data));
-    return render();
-  }
-  if (action === "iam-back") {
-    ensureIamWizard().step -= 1;
-    return render();
-  }
-  if (action === "iam-next") {
-    const wizard = ensureIamWizard();
-    if (wizard.step === 2 && (!wizard.displayName || !wizard.tenantDomain || !wizard.owner)) return showToast("Connection name, tenant domain and owner are required", "error");
-    if (wizard.step === 3 && (!wizard.apiBaseUrl || !wizard.credentialType || !wizard.clientId || !wizard.clientSecret)) return showToast("API base URL, credential type, client ID and secret/token are required", "error");
-    wizard.step += 1;
-    return render();
-  }
-  if (action === "connect-iam") return connectIam(data);
-  if (action === "open-import-modal") {
-    stateful.importModal = null;
-    stateful.modal = "import";
-    return render();
-  }
-  if (action === "download-template") return downloadTemplate();
-  if (action === "parse-import-csv") {
-    const modal = ensureImportModal();
-    modal.rows = parseCsv(modal.csvText, data, modal.importType === "Role Permission Mapping" ? "permission" : "assignment");
-    return render();
-  }
-  if (action === "map-import-columns") {
-    ensureImportModal().mapped = true;
-    showToast("Columns mapped by header names");
-    return render();
-  }
-  if (action === "confirm-import") return confirmImport(data);
   if (action === "open-agent-wizard") {
     stateful.agentWizard = null;
     stateful.modal = "agent";
@@ -2881,6 +2564,14 @@ function runConfirmAction() {
     });
     showToast(enabled ? "Permissions layer enabled" : "Permissions layer disabled — all requests now deny", enabled ? "success" : "error");
   }
+  if (confirm.confirmAction === "delete-group") {
+    store.update((draft) => {
+      const group = (draft.groups || []).find((item) => item.id === confirm.payload.id);
+      draft.groups = (draft.groups || []).filter((item) => item.id !== confirm.payload.id);
+      addAuditEvent(draft, { eventType: "Role Disabled", principalType: "Group", principal: group?.name, summary: "Group deleted" });
+    });
+    showToast("Group deleted");
+  }
   if (confirm.confirmAction === "delete-agent") {
     store.update((draft) => {
       const agent = byId(draft.agents, confirm.payload.id);
@@ -2890,6 +2581,21 @@ function runConfirmAction() {
     showToast("Agent deleted");
   }
   render();
+}
+
+function saveGroup(data) {
+  const draft = ensureGroupModal();
+  if (!draft.name) return showToast("Group name is required", "error");
+  store.update((state) => {
+    state.groups = state.groups || [];
+    const existing = state.groups.find((group) => group.id === draft.id);
+    if (existing) Object.assign(existing, { name: draft.name, rule: draft.rule, description: draft.description });
+    else state.groups.push({ id: `grp_${Date.now()}`, name: draft.name, rule: draft.rule, description: draft.description, extraMemberIds: [] });
+    addAuditEvent(state, { eventType: existing ? "Role Updated" : "Role Created", principalType: "Group", principal: draft.name, summary: `Group ${existing ? "updated" : "created"} with rule ${draft.rule}` });
+  });
+  stateful.groupModal = null;
+  stateful.modal = null;
+  showToast(draft.id ? "Group updated" : "Group created");
 }
 
 function toggleArray(array, value, checked, rerender = false) {
@@ -2955,7 +2661,6 @@ function cycleDraftPermission(connectionId, resourceType, permission) {
 
 function saveRole(data, status) {
   const wizard = ensureRoleWizard(data);
-  wizard.draft.employeeIds = [...new Set([...wizard.draft.employeeIds, ...wizard.draft.previewEmployeeIds, ...wizard.draft.csvRows.filter((row) => row.valid).map((row) => row.employeeId)])];
   store.update((draft) => createRoleFromDraft(draft, wizard.draft, status));
   stateful.roleWizard = null;
   stateful.modal = null;
@@ -3017,68 +2722,6 @@ function toggleSourceProvision(roleId, grantId, checked) {
   });
 }
 
-function removeEmployeeRole(roleId, employeeId) {
-  store.update((draft) => {
-    const role = byId(draft.roles, roleId);
-    const employee = byId(draft.employees, employeeId);
-    if (!role || !employee) return;
-    role.assignedEmployeeIds = role.assignedEmployeeIds.filter((idValue) => idValue !== employeeId);
-    employee.roleIds = employee.roleIds.filter((idValue) => idValue !== roleId);
-    addAuditEvent(draft, { eventType: "Employee Removed from Role", principalType: "Employee", principal: employee.name, summary: `${employee.name} removed from ${role.name}` });
-  });
-  showToast("Employee removed from role");
-}
-
-function addTempAccess(roleId, employeeId) {
-  store.update((draft) => addEmployeesToRole(draft, roleId, [employeeId], true));
-  showToast("Temporary assignment created");
-}
-
-function addRoleToEmployee() {
-  const roleId = stateful.selectedRoleForEmployee || store.getState().roles[0]?.id;
-  store.update((draft) => addEmployeesToRole(draft, roleId, [stateful.addRoleEmployeeId]));
-  closeModal();
-  showToast("Role added to employee");
-}
-
-function addEmployeeTempAccess(employeeId) {
-  const roleId = store.getState().roles[0]?.id;
-  store.update((draft) => addEmployeesToRole(draft, roleId, [employeeId], true));
-  showToast("Temporary access added");
-}
-
-function addExplicitRestriction(employeeId) {
-  store.update((draft) => {
-    const employee = byId(draft.employees, employeeId);
-    draft.restrictions.push({ id: `restriction_${Date.now()}`, employeeId, type: "Explicit Deny", summary: "Export blocked for sensitive records", createdAt: new Date().toISOString() });
-    addAuditEvent(draft, { eventType: "Permission Denied", principalType: "Employee", principal: employee?.name, summary: "Explicit restriction added" });
-  });
-  showToast("Explicit restriction added");
-}
-
-function createRule(data) {
-  const rule = stateful.ruleModal;
-  store.update((draft) => {
-    const matchingEmployeeIds = draft.employees.filter((employee) => rule.conditions.includes(employee.department) || rule.conditions.includes(employee.employmentStatus)).map((employee) => employee.id);
-    draft.assignmentRules.unshift({ id: `rule_${Date.now()}`, ...rule, matchingEmployeeIds, lastEvaluated: new Date().toISOString() });
-    addAuditEvent(draft, { eventType: "Assignment Rule Evaluated", principal: byId(draft.roles, rule.roleId)?.name, source: rule.source, summary: `${rule.name} created with ${matchingEmployeeIds.length} matching employee(s)` });
-  });
-  closeModal();
-  showToast("Assignment rule created");
-}
-
-function mutateRule(action, ruleId) {
-  store.update((draft) => {
-    const rule = byId(draft.assignmentRules, ruleId);
-    if (!rule) return;
-    if (action === "duplicate-rule") draft.assignmentRules.unshift({ ...structuredClone(rule), id: `rule_${Date.now()}`, name: `${rule.name} Copy`, status: "Draft" });
-    if (action === "toggle-rule") rule.status = rule.status === "Active" ? "Disabled" : "Active";
-    if (action === "delete-rule") draft.assignmentRules = draft.assignmentRules.filter((item) => item.id !== ruleId);
-    addAuditEvent(draft, { eventType: "Assignment Rule Evaluated", principal: byId(draft.roles, rule.roleId)?.name, source: rule.source, summary: `${rule.name} ${action.replaceAll("-", " ")}` });
-  });
-  showToast("Assignment rule updated");
-}
-
 function applyLifecycleSimulation() {
   const result = stateful.lifecycle.result;
   if (!result) return;
@@ -3088,8 +2731,7 @@ function applyLifecycleSimulation() {
     if (stateful.lifecycle.eventType === "Leaver") {
       employee.employmentStatus = "Inactive";
       employee.accessStatus = "Revoked";
-      employee.roleIds = [];
-      draft.roles.forEach((role) => role.assignedEmployeeIds = role.assignedEmployeeIds.filter((idValue) => idValue !== employee.id));
+      // Group rules key off employment status, so membership drops out on its own.
       addAuditEvent(draft, { eventType: "Leaver Access Revoked", principalType: "Employee", principal: employee.name, source: "HRMS", summary: "Leaver event revoked access" });
     } else if (stateful.lifecycle.eventType === "Mover") {
       employee[stateful.lifecycle.changedField] = stateful.lifecycle.newValue;
@@ -3103,57 +2745,6 @@ function applyLifecycleSimulation() {
   });
   stateful.lifecycle.result = null;
   showToast("Simulated HRMS event applied");
-}
-
-function connectIam(data) {
-  const wizard = ensureIamWizard();
-  store.update((draft) => connectIamProvider(draft, wizard.provider, {}, {
-    displayName: wizard.displayName,
-    tenantDomain: wizard.tenantDomain,
-    owner: wizard.owner,
-    environment: wizard.environment,
-    apiBaseUrl: wizard.apiBaseUrl,
-    credentialType: wizard.credentialType,
-    clientId: wizard.clientId,
-    clientSecret: wizard.clientSecret,
-    scimBaseUrl: wizard.scimBaseUrl
-  }));
-  stateful.iamWizard = null;
-  stateful.modal = null;
-  showToast("IAM connected and groups loaded");
-}
-
-function downloadTemplate() {
-  const modal = ensureImportModal();
-  const text = modal.importType === "Role Permission Mapping"
-    ? "role_code,category,tool,connection_id,resource_type,resource_id,action,effect,field_restrictions,effective_from,effective_until\nFIN-MGR,Accounting,Zoho Books,conn_zoho,Invoices,invoices_india,View invoices,allow,Bank account number:Masked,2026-07-27,\n"
-    : "role_code,role_name,employee_id,employee_name,work_email,effective_from,effective_until\nFIN-MGR,Finance Manager,EMP-1009,Tanya Bose,tanya.bose@tartanhq.com,2026-07-27,\n";
-  const blob = new Blob([text], { type: "text/csv" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = modal.importType === "Role Permission Mapping" ? "role_permission_mapping_template.csv" : "role_employee_assignment_template.csv";
-  link.click();
-  URL.revokeObjectURL(link.href);
-}
-
-function confirmImport(data) {
-  const modal = ensureImportModal();
-  store.update((draft) => {
-    modal.rows.filter((row) => row.valid).forEach((row) => {
-      let role = draft.roles.find((item) => item.code === row.role_code);
-      if (!role && modal.importType === "Roles and Employee Assignments") {
-        role = createRoleFromDraft(draft, { name: row.role_name || row.role_code, code: row.role_code, employeeIds: [], connectionIds: [], assignmentMethods: ["Upload CSV"], origin: "Imported" }, "Draft");
-      }
-      if (role && modal.importType === "Roles and Employee Assignments") addEmployeesToRole(draft, role.id, [row.employeeId]);
-      if (role && modal.importType === "Role Permission Mapping") {
-        const grant = role.permissions.find((permission) => permission.connectionId === row.connection_id);
-        if (grant && grant.matrix[row.resource_type]?.[row.action] !== undefined) grant.matrix[row.resource_type][row.action] = row.effect === "deny" ? "deny" : "allow";
-      }
-    });
-    addAuditEvent(draft, { eventType: "Role Updated", principal: "CSV Import", source: "CSV Import", summary: `${modal.rows.filter((row) => row.valid).length} CSV row(s) imported` });
-  });
-  closeModal();
-  showToast("Import confirmed");
 }
 
 function publishAgent(data) {

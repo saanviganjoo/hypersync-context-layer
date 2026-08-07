@@ -20,7 +20,7 @@ export const STORAGE_KEY = "hypersync_permissions_state_v1";
  * This does discard local edits made against an older seed, which is the right
  * trade for a prototype whose seed data *is* the demo.
  */
-export const SEED_VERSION = 3;
+export const SEED_VERSION = 4;
 
 const now = () => new Date().toISOString();
 const daysAgo = (days) => new Date(Date.now() - days * 86400000).toISOString();
@@ -169,7 +169,7 @@ function employees() {
     ["emp_omar", "EMP-1010", "Omar Farooq", "omar.farooq@tartanhq.com", "Engineering", "Backend Engineer", "L3", "Hyderabad", "Full-time", "Active", "Ishaan Mehta", "okta_omar", "omar-farooq", ["role_general_employee"]],
     ["emp_jia", "EMP-1011", "Jia Fernandes", "jia.fernandes@tartanhq.com", "Contractors", "Data Consultant", "C1", "Remote", "Contractor", "Active", "Rahul Menon", "okta_jia", "jia-fernandes", ["role_contractor"]],
     ["emp_rohan", "EMP-1012", "Rohan Das", "rohan.das@tartanhq.com", "Support", "Support Contractor", "C1", "Remote", "Contractor", "Inactive", "Vikram Sethi", "okta_rohan", "rohan-das", ["role_contractor"]]
-  ].map(([idValue, employeeId, name, workEmail, department, designation, grade, location, employmentType, employmentStatus, manager, iamUserId, githubUsername, roleIds]) => ({
+  ].map(([idValue, employeeId, name, workEmail, department, designation, grade, location, employmentType, employmentStatus, manager, iamUserId, githubUsername]) => ({
     id: idValue,
     employeeId,
     name,
@@ -192,52 +192,69 @@ function employees() {
       jiraAccountId: `${name.toLowerCase().replaceAll(" ", ".")}:jira`,
       githubUsername
     },
-    roleIds,
-    assignmentSource: roleIds.includes("role_contractor") ? "CSV list" : "HRMS attribute rule",
+    // No roleIds here on purpose: roles reach a person only through group membership,
+    // so a single derivation from group rules is the one source of truth.
     accessStatus: employmentStatus === "Active" ? "Active" : "Revoked",
-    lastEvaluated: daysAgo(roleIds.includes("role_contractor") ? 4 : 1)
+    syncedAt: daysAgo(employmentType === "Contractor" ? 4 : 1)
   }));
 }
 
-function assignmentRules() {
+/**
+ * Groups are the single membership unit. A group carries one plain attribute rule,
+ * which is also what makes joiner provisioning automatic: a newly synced employee
+ * matching the rule joins the group and inherits its roles. There is deliberately no
+ * IAM-vs-HRMS-vs-CSV-vs-manual choice — those were four routes to the same fact.
+ */
+function groups() {
   return [
-    {
-      id: "rule_finance_m2",
-      name: "Finance managers M2+",
-      roleId: "role_finance_manager",
-      source: "HRMS",
-      conditions: "Department = Finance AND Grade = M2..M4 AND Employment Status = Active",
-      matchingEmployeeIds: ["emp_rahul"],
-      lifecycleEvents: ["Joiner", "Mover"],
-      priority: 10,
-      status: "Active",
-      lastEvaluated: daysAgo(1)
-    },
-    {
-      id: "rule_support_active",
-      name: "Active support team",
-      roleId: "role_support_agent",
-      source: "HRMS",
-      conditions: "Department = Support AND Grade < M2 AND Employment Status = Active",
-      matchingEmployeeIds: ["emp_sana"],
-      lifecycleEvents: ["Joiner", "Mover", "Leaver"],
-      priority: 20,
-      status: "Active",
-      lastEvaluated: daysAgo(1)
-    },
-    {
-      id: "rule_engineering_leads",
-      name: "Engineering leads",
-      roleId: "role_engineering_lead",
-      source: "IAM",
-      conditions: "IAM Group = github-maintainers",
-      matchingEmployeeIds: ["emp_ishaan", "emp_neha"],
-      lifecycleEvents: ["Joiner", "Mover", "Leaver"],
-      priority: 30,
-      status: "Active",
-      lastEvaluated: daysAgo(2)
-    }
-  ];
+    ["grp_finance_mgmt", "Finance Management", "Designation = Finance Manager", "Finance managers who review the India books.", []],
+    ["grp_finance_lead", "Finance Leadership", "Designation = Director Finance", "Finance leadership with visibility across every entity.", []],
+    ["grp_support", "Support Agents", "Designation = Support Agent", "Frontline support staff on the customer queue.", []],
+    ["grp_support_lead", "Support Leadership", "Designation = Support Lead", "Support leads covering every ticket queue.", []],
+    ["grp_engineering", "Engineering Leads", "Designation = Engineering Lead", "Engineers who own repositories and review code.", ["emp_neha"]],
+    ["grp_people", "People Ops", "Department = Human Resources", "HR operations and the people team.", []],
+    ["grp_contractors", "Contractors", "Employment Type = Contractor", "External workers on deliberately restricted access.", []],
+    ["grp_everyone", "All Employees", "Employment Status = Active", "Baseline access every active employee gets.", []]
+  ].map(([groupId, name, rule, description, extraMemberIds]) => ({ id: groupId, name, rule, description, extraMemberIds }));
+}
+
+export const GROUP_RULE_FIELDS = ["Designation", "Department", "Employment Type", "Employment Status", "Grade", "Location"];
+
+/** One plain attribute rule, evaluated against a synced employee record. */
+export function matchesRule(employee, rule) {
+  const [field, value] = String(rule || "").split("=").map((part) => part.trim());
+  if (!field || !value) return false;
+  const byField = {
+    Designation: employee.designation,
+    Department: employee.department,
+    "Employment Type": employee.employmentType,
+    "Employment Status": employee.employmentStatus,
+    Grade: employee.grade,
+    Location: employee.location
+  };
+  return byField[field] === value;
+}
+
+export function isGroupMember(employee, group) {
+  return matchesRule(employee, group.rule) || (group.extraMemberIds || []).includes(employee.id);
+}
+
+/** Resolves a group's members from its rule, plus anyone added by hand. */
+export function groupMembers(state, group) {
+  if (!group) return [];
+  return state.employees.filter((employee) => isGroupMember(employee, group));
+}
+
+export function groupsForEmployee(state, employeeId) {
+  const employee = state.employees.find((item) => item.id === employeeId);
+  if (!employee) return [];
+  return (state.groups || []).filter((group) => isGroupMember(employee, group));
+}
+
+/** Every role that reaches this employee, through any group they belong to. */
+export function rolesForEmployeeViaGroups(state, employeeId) {
+  const memberGroupIds = groupsForEmployee(state, employeeId).map((group) => group.id);
+  return (state.roles || []).filter((role) => (role.groupIds || []).some((groupId) => memberGroupIds.includes(groupId)));
 }
 
 function auditEvents() {
@@ -383,9 +400,11 @@ const observedAccessDeltas = {
   emp_omar: { add: { conn_drive: { Files: { actions: ["Download file"] } } } }
 };
 
-function deriveObservedAccess(roleList, employeeList) {
+function deriveObservedAccess(roleList, employeeList, groupList) {
   const map = {};
   employeeList.forEach((employee) => {
+    const memberGroupIds = groupList.filter((group) => isGroupMember(employee, group)).map((group) => group.id);
+    const employeeRoles = roleList.filter((role) => (role.groupIds || []).some((groupId) => memberGroupIds.includes(groupId)));
     const rows = new Map();
     const upsert = (connectionId, resourceType, resourceIds, actions) => {
       const key = `${connectionId}|${resourceType}`;
@@ -399,8 +418,7 @@ function deriveObservedAccess(roleList, employeeList) {
       rows.set(key, row);
     };
 
-    roleList
-      .filter((role) => employee.roleIds.includes(role.id))
+    employeeRoles
       .forEach((role) => {
         role.permissions.forEach((permission) => {
           Object.entries(permission.matrix).forEach(([resourceType, actions]) => {
@@ -448,7 +466,7 @@ export function createDemoState() {
       origin: "Created manually",
       membership: ["HRMS attribute rule"],
       status: "Active",
-      assignedEmployeeIds: ["emp_rahul"],
+      groupIds: ["grp_finance_mgmt"],
       permissions: [
         grant(byId.conn_zoho, { Accounts: ["Search accounts", "View accounts", "Export accounts"], Invoices: ["Search invoices", "View invoices", "Create invoices", "Approve invoices", "Export invoices"], Payments: ["Search payments", "View payments", "Approve payments"] }, { resourceScope: { resourceIds: ["entity_india", "accounts_master", "invoices_india", "payments_india"] }, conditions: { approvalRequired: true, approvalAmount: "250000", maxRecords: 1000 }, fieldRestrictions: { "Bank account number": "Masked", "Tax identifier": "Visible", "Payment details": "Masked" } }),
         grant(byId.conn_drive, { Drives: ["View drive"], Folders: ["View folder", "Share folder"], Files: ["Search files", "View file metadata", "Read file content", "Download file", "Export file"] }, { resourceScope: { resourceIds: ["drive_finance", "folder_india_finance", "folder_audit", "file_invoice_pack", "file_audit_report"] }, provisionToSource: true, sourceProvisioningStatus: "Provisioned in Source", fieldRestrictions: { "External sharing": "Masked", "File content": "Visible", "File download": "Visible" } }),
@@ -464,7 +482,7 @@ export function createDemoState() {
       origin: "Created manually",
       membership: ["HRMS attribute rule"],
       status: "Active",
-      assignedEmployeeIds: ["emp_aditi"],
+      groupIds: ["grp_finance_lead"],
       permissions: [
         grant(byId.conn_zoho, { Accounts: ["Search accounts", "View accounts"], Invoices: ["Search invoices", "View invoices", "Create invoices", "Approve invoices"], Payments: ["Search payments", "View payments", "Approve payments"] }, { resourceScope: { resourceIds: ["entity_india", "entity_us", "accounts_master", "invoices_india", "invoices_us", "payments_india"] }, conditions: { approvalRequired: true, approvalAmount: "1000000", maxRecords: 2000 }, fieldRestrictions: { "Bank account number": "Masked", "Tax identifier": "Visible", "Payment details": "Masked" } }),
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"] }, { resourceScope: { resourceIds: ["space_finance", "page_qbr"] } })
@@ -479,7 +497,7 @@ export function createDemoState() {
       origin: "Created manually",
       membership: ["IAM group"],
       status: "Active",
-      assignedEmployeeIds: ["emp_vikram"],
+      groupIds: ["grp_support_lead"],
       permissions: [
         grant(byId.conn_jira, { Projects: ["View project"], Tickets: ["Search tickets", "View ticket", "Create ticket", "Edit ticket", "Assign ticket", "Transition ticket"], Comments: ["View comments", "Add comments", "View internal comments"], Attachments: ["View attachments", "Download attachments"] }, { resourceScope: { resourceIds: ["jira_support", "tickets_support", "jira_fin", "tickets_finance", "jira_internal_comments"] }, fieldRestrictions: { "Customer personal information": "Masked", "Internal comments": "Visible", "Attachment URLs": "Visible" } }),
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments", "Add comments"] }, { resourceScope: { resourceIds: ["space_support", "page_support_playbook"] } })
@@ -494,7 +512,7 @@ export function createDemoState() {
       origin: "Created manually",
       membership: ["IAM group", "Manual list"],
       status: "Active",
-      assignedEmployeeIds: ["emp_sana"],
+      groupIds: ["grp_support"],
       permissions: [
         grant(byId.conn_jira, { Projects: ["View project"], Tickets: ["Search tickets", "View ticket", "Create ticket", "Edit ticket", "Assign ticket"], Comments: ["View comments", "Add comments"], Attachments: ["View attachments", "Download attachments"] }, { resourceScope: { resourceIds: ["jira_support", "tickets_support"] }, fieldRestrictions: { "Internal comments": "Hidden", "Attachment URLs": "Masked", "Customer personal information": "Masked" } }),
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments", "Add comments"] }, { resourceScope: { resourceIds: ["space_support", "page_support_playbook"] } })
@@ -509,7 +527,7 @@ export function createDemoState() {
       origin: "Created manually",
       membership: ["IAM group"],
       status: "Active",
-      assignedEmployeeIds: ["emp_ishaan", "emp_neha"],
+      groupIds: ["grp_engineering"],
       permissions: [
         grant(byId.conn_github, { Organizations: ["View organization"], Repositories: ["View repository", "Read code", "Push code", "Manage repository"], Issues: ["View issue", "Create issue", "Edit issue", "Close issue"], "Pull Requests": ["View pull request", "Create pull request", "Review pull request", "Merge pull request"] }, { resourceScope: { resourceIds: ["org_tartanhq", "repo_frontend", "repo_backend", "repo_internal", "gh_prs"] }, provisionToSource: true, sourceProvisioningStatus: "Pending Provisioning" }),
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page", "Create page", "Edit page"], Comments: ["View comments", "Add comments"] }, { resourceScope: { resourceIds: ["space_engineering", "page_eng_architecture"] } })
@@ -524,7 +542,7 @@ export function createDemoState() {
       origin: "Created manually",
       membership: ["Manual list"],
       status: "Active",
-      assignedEmployeeIds: ["emp_priya"],
+      groupIds: ["grp_people"],
       permissions: [
         grant(byId.conn_darwinbox, { Employees: ["Search employees", "View employee profile", "View employment information", "View compensation", "Update employee profile", "Export employee data"], Employment: ["Read metadata", "Read content", "Update"], Attendance: ["Search", "Read content", "Aggregate"] }, { resourceScope: { resourceIds: ["emp_all", "emp_hr", "emp_finance", "attendance_all"] }, fieldRestrictions: { Salary: "Visible", "Bank details": "Hidden", "Identity numbers": "Masked", "Personal address": "Masked" }, conditions: { managedDeviceRequired: true, reasonRequired: true } })
       ]
@@ -538,7 +556,7 @@ export function createDemoState() {
       origin: "System defined",
       membership: ["HRMS attribute rule"],
       status: "Active",
-      assignedEmployeeIds: ["emp_kabir", "emp_tanya", "emp_omar"],
+      groupIds: ["grp_everyone"],
       permissions: [
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"], Comments: ["View comments"] }, { resourceScope: { resourceIds: ["space_hr", "page_onboarding"] } }),
         grant(byId.conn_drive, { Folders: ["View folder"], Files: ["Search files", "View file metadata", "Read file content"] }, { resourceScope: { resourceIds: ["folder_policies", "file_policy_handbook"] }, fieldRestrictions: { "File content": "Visible", "File download": "Hidden", "External sharing": "Hidden" } })
@@ -553,7 +571,7 @@ export function createDemoState() {
       origin: "Imported",
       membership: ["CSV list"],
       status: "Active",
-      assignedEmployeeIds: ["emp_jia", "emp_rohan"],
+      groupIds: ["grp_contractors"],
       permissions: [
         grant(byId.conn_confluence, { Spaces: ["View space"], Pages: ["Search pages", "View page"] }, { resourceScope: { resourceIds: ["space_engineering", "space_support", "page_eng_architecture"] }, conditions: { exportAllowed: false, externalSharingAllowed: false, maxRecords: 50, expiryDate: "2026-09-30" } }),
         grant(byId.conn_drive, { Files: ["Search files", "View file metadata"] }, { resourceScope: { resourceIds: ["folder_engineering_docs", "file_eng_runbook"] }, fieldRestrictions: { "File content": "Hidden", "File download": "Hidden", "External sharing": "Hidden" } })
@@ -565,10 +583,10 @@ export function createDemoState() {
     currentCorporate: "TartanHQ India",
     createdAt: daysAgo(30 - index),
     updatedAt: daysAgo(index + 1),
-    activeAssignmentRules: assignmentRules().filter((rule) => rule.roleId === role.id).length
   }));
 
   const demoEmployees = employees();
+  const demoGroups = groups();
 
   return {
     version: 1,
@@ -580,17 +598,9 @@ export function createDemoState() {
     resources: resources(),
     roles: demoRoles,
     employees: demoEmployees,
-    observedAccess: deriveObservedAccess(demoRoles, demoEmployees),
+    groups: demoGroups,
+    observedAccess: deriveObservedAccess(demoRoles, demoEmployees, demoGroups),
     ceilingSyncedAt: daysAgo(0.08),
-    iamProviders: [{ id: "iam_okta", provider: "Okta", status: "Connected", lastSync: daysAgo(1), groupsLoaded: true }],
-    iamGroups: [
-      { id: "grp_finance_mgmt", providerId: "iam_okta", name: "finance-management", members: 9, mappedRoleId: "role_finance_manager" },
-      { id: "grp_support_ops", providerId: "iam_okta", name: "support-operations", members: 18, mappedRoleId: "role_support_agent" },
-      { id: "grp_support_leads", providerId: "iam_okta", name: "support-leads", members: 4, mappedRoleId: "role_support_lead" },
-      { id: "grp_github_maintainers", providerId: "iam_okta", name: "github-maintainers", members: 7, mappedRoleId: "role_engineering_lead" },
-      { id: "grp_all_employees", providerId: "iam_okta", name: "all-employees", members: 142, mappedRoleId: "role_general_employee" }
-    ],
-    assignmentRules: assignmentRules(),
     temporaryAccess: [],
     restrictions: [],
     agents: agents(),
@@ -616,11 +626,9 @@ function normalizeState(input) {
     resources: { ...demo.resources, ...(input.resources || {}) },
     roles: Array.isArray(input.roles) ? input.roles : demo.roles,
     employees: Array.isArray(input.employees) ? input.employees : demo.employees,
+    groups: Array.isArray(input.groups) ? input.groups : demo.groups,
     observedAccess: input.observedAccess && typeof input.observedAccess === "object" ? input.observedAccess : demo.observedAccess,
     ceilingSyncedAt: input.ceilingSyncedAt || demo.ceilingSyncedAt,
-    iamProviders: Array.isArray(input.iamProviders) ? input.iamProviders : demo.iamProviders,
-    iamGroups: Array.isArray(input.iamGroups) ? input.iamGroups : demo.iamGroups,
-    assignmentRules: Array.isArray(input.assignmentRules) ? input.assignmentRules : demo.assignmentRules,
     temporaryAccess: Array.isArray(input.temporaryAccess) ? input.temporaryAccess : demo.temporaryAccess,
     restrictions: Array.isArray(input.restrictions) ? input.restrictions : demo.restrictions,
     agents: Array.isArray(input.agents) ? input.agents : demo.agents,
@@ -776,7 +784,6 @@ export function createConnectionFromDraft(draft, form) {
  * it carries membership, and never defines what a role may do.
  */
 export const ROLE_ORIGINS = ["Suggested from tool sync", "Created manually", "Imported", "System defined"];
-export const MEMBERSHIP_KINDS = ["IAM group", "HRMS attribute rule", "Manual list", "CSV list"];
 
 const METHOD_TO_MEMBERSHIP = {
   "IAM Group": "IAM group",
@@ -784,11 +791,6 @@ const METHOD_TO_MEMBERSHIP = {
   "Add Employees Manually": "Manual list",
   "Upload CSV": "CSV list"
 };
-
-export function membershipFromMethods(methods = []) {
-  const mapped = [...new Set(methods.map((method) => METHOD_TO_MEMBERSHIP[method]).filter(Boolean))];
-  return mapped.length ? mapped : ["Manual list"];
-}
 
 export function createRoleFromDraft(draft, form, status = "Active") {
   const roleId = form.id || id("role");
@@ -802,7 +804,7 @@ export function createRoleFromDraft(draft, form, status = "Active") {
     owner: form.owner || draft.currentUser.name,
     // Origin is stamped, never chosen — nobody picks their own provenance.
     origin: form.origin || "Created manually",
-    membership: membershipFromMethods(form.assignmentMethods),
+    groupIds: form.groupIds || [],
     status,
     corporateId: draft.corporate.id,
     currentCorporate: draft.corporate.name,
@@ -880,73 +882,6 @@ export function deleteRole(draft, roleId) {
   });
   addAuditEvent(draft, { eventType: "Role Disabled", principal: role.name, summary: `${role.name} deleted from prototype state` });
   return true;
-}
-
-export function addEmployeesToRole(draft, roleId, employeeIds, temporary = false) {
-  const role = draft.roles.find((item) => item.id === roleId);
-  if (!role) return;
-  employeeIds.forEach((employeeId) => {
-    if (!role.assignedEmployeeIds.includes(employeeId)) role.assignedEmployeeIds.push(employeeId);
-    const employee = draft.employees.find((item) => item.id === employeeId);
-    if (employee && !employee.roleIds.includes(roleId)) employee.roleIds.push(roleId);
-    if (temporary) {
-      draft.temporaryAccess.push({
-        id: id("temp"),
-        employeeId,
-        roleId,
-        reason: "Temporary access granted from prototype",
-        effectiveFrom: new Date().toISOString().slice(0, 10),
-        effectiveUntil: "2026-08-31",
-        approver: draft.currentUser.name,
-        approvalStatus: "Approved"
-      });
-    }
-  });
-  role.updatedAt = now();
-  addAuditEvent(draft, { eventType: "Employee Added to Role", principal: role.name, summary: `${employeeIds.length} employee(s) added` });
-}
-
-export function connectIamProvider(draft, provider, mappings = {}, details = {}) {
-  const providerId = id("iam");
-  draft.iamProviders.unshift({
-    id: providerId,
-    provider,
-    displayName: details.displayName || `${provider} Directory`,
-    tenantDomain: details.tenantDomain || "",
-    owner: details.owner || draft.currentUser.name,
-    environment: details.environment || "Production",
-    apiBaseUrl: details.apiBaseUrl || "",
-    credentialType: details.credentialType || "OAuth Client Credentials",
-    credentialConfigured: Boolean(details.clientSecret),
-    clientIdSuffix: details.clientId ? details.clientId.slice(-4) : "",
-    scimBaseUrl: details.scimBaseUrl || "",
-    status: "Connected",
-    lastSync: now(),
-    groupsLoaded: true
-  });
-  const groupNames = {
-    Okta: ["finance-management", "support-operations", "github-maintainers", "all-employees"],
-    "Microsoft Entra ID (Azure AD)": ["entra-finance", "entra-support", "entra-engineering", "entra-contractors"],
-    "Google Workspace": ["gws-finance", "gws-support", "gws-engineering", "gws-all"],
-    "Custom OIDC / SCIM": ["scim-finance", "scim-support", "scim-engineering", "scim-all"]
-  }[provider] || ["finance-management", "support-operations"];
-  groupNames.forEach((name, index) => {
-    draft.iamGroups.unshift({
-      id: id("grp"),
-      providerId,
-      name,
-      members: [9, 18, 7, 142][index] || 6,
-      mappedRoleId: mappings[name] || ""
-    });
-  });
-  addAuditEvent(draft, { eventType: "IAM Connected", principalType: "IAM Provider", principal: provider, source: "IAM", summary: `${provider} connected with ${details.credentialType || "OAuth Client Credentials"} in simulation mode` });
-}
-
-export function syncIamProvider(draft, providerId) {
-  const provider = draft.iamProviders.find((item) => item.id === providerId);
-  if (!provider) return;
-  provider.lastSync = now();
-  addAuditEvent(draft, { eventType: "IAM Synced", principalType: "IAM Provider", principal: provider.provider, source: "IAM", summary: `${provider.provider} sync completed` });
 }
 
 export function createAgentProfile(draft, form, status = "Active") {
